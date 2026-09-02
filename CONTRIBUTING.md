@@ -24,7 +24,9 @@ lake build
 lake env lean audit/AxiomAudit.lean
 ```
 
-The trusted core rejects project-authored `sorry`, `admit`, custom `axiom` declarations, and `native_decide`. Arithmetic decision proofs should use kernel reduction (`decide`) or another proof-producing tactic. CI also checks exported theorem dependencies against the reviewed allow-list `propext`, `Classical.choice`, and `Quot.sound`.
+The trusted core rejects project-authored `sorry`, `admit`, direct `sorryAx`, custom `axiom` or `constant` declarations, `native_decide`, and direct `Lean.ofReduceBool` trust. Arithmetic decision proofs should use kernel reduction (`decide`) or another proof-producing tactic. CI also checks exported theorem dependencies against the reviewed allow-list `propext`, `Classical.choice`, and `Quot.sound`.
+
+The trust scanner treats executable interpolation expressions as code, recognizes Lean identifier suffixes such as `'`, `?`, and `!`, masks ordinary and raw string literals correctly, preserves dangerous quoted trusted-base names for inspection, and scans `.lean` symlinks as source modules.
 
 If a future theorem requires assumptions, make them explicit in the theorem statement or propose a reviewed axiom-policy change rather than hiding the dependency.
 
