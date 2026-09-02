@@ -61,9 +61,8 @@ jobs:
 
       # The dependency declaration pins Mathlib by exact commit, so this cache
       # identity changes whenever the Lean toolchain or dependency declaration
-      # changes. On a warm hit Lake can reuse both dependency sources and the
-      # Mathlib build artifacts instead of recloning and redownloading thousands
-      # of cached proof objects on every PR head.
+      # changes. A compatible older key can still supply the same dependency
+      # graph when an unrelated Lake target setting changes.
       - name: Restore Lean dependency/build cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
@@ -71,6 +70,8 @@ jobs:
             .lake/packages
             lake-manifest.json
           key: cosmo-lean-deps-v1-${{ runner.os }}-lean-4.33.1-${{ hashFiles('lean-toolchain', 'lakefile.lean') }}
+          restore-keys: |
+            cosmo-lean-deps-v1-${{ runner.os }}-lean-4.33.1-
 
       - name: Build pinned Lake project
         run: lake build
