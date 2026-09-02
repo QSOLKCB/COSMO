@@ -98,7 +98,7 @@ jobs:
           open Lean Elab Command
 
           run_cmd do
-            addDecl <| Declaration.axiomDecl {
+            liftCoreM <| addDecl <| Declaration.axiomDecl {
               name := `CosmoTrustFixture.generatedBogus
               levelParams := []
               type := mkConst ``False
