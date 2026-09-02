@@ -75,34 +75,49 @@ jobs:
       - name: Build pinned Lake project
         run: lake build
 
-      - name: Reject admitted proofs, custom axioms, and native_decide
+      - name: Reject admitted proofs, custom declarations, and native_decide lexically
         run: ./scripts/check-lean-trust.sh
 
-      - name: Audit theorem axiom dependencies
+      - name: Audit every COSMO declaration semantically
+        shell: bash
+        run: lake env lean audit/AxiomAudit.lean | tee axiom-report.txt
+
+      - name: Regression-test generated axiom rejection
         shell: bash
         run: |
-          lake env lean audit/AxiomAudit.lean | tee axiom-report.txt
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
+          set -euo pipefail
+          temporary="$(mktemp -d)"
+          fixture="$temporary/GeneratedAxiomFixture.lean"
+          report="$temporary/generated-axiom-report.txt"
+          trap 'rm -rf "$temporary"' EXIT
 
-          allowed = {"propext", "Classical.choice", "Quot.sound"}
-          unexpected: list[tuple[str, list[str]]] = []
+          cat > "$fixture" <<'LEAN'
+          import CosmoTrust
 
-          for line in Path("axiom-report.txt").read_text(encoding="utf-8").splitlines():
-              match = re.search(r"depends on axioms: \[(.*)\]$", line)
-              if match is None:
-                  continue
-              dependencies = [item.strip() for item in match.group(1).split(",") if item.strip()]
-              bad = [item for item in dependencies if item not in allowed]
-              if bad:
-                  unexpected.append((line, bad))
+          open Lean Elab Command
 
-          if unexpected:
-              for line, bad in unexpected:
-                  print(f"ERROR: unexpected Lean axiom dependency {bad}: {line}")
-              raise SystemExit(1)
-          PY
+          run_cmd do
+            addDecl <| Declaration.axiomDecl {
+              name := `CosmoTrustFixture.generatedBogus
+              levelParams := []
+              type := mkConst ``False
+              isUnsafe := false
+            }
+
+          run_cmd do
+            CosmoTrust.auditNamedDeclarations
+              "generated declaration regression fixture"
+              #[`CosmoTrustFixture.generatedBogus]
+          LEAN
+
+          if lake env lean "$fixture" >"$report" 2>&1; then
+            cat "$report"
+            echo "ERROR: semantic trust audit accepted a generated axiom declaration."
+            exit 1
+          fi
+
+          cat "$report"
+          grep -F "project-generated axiom declaration" "$report" >/dev/null
 
   python:
     name: Python deterministic core
