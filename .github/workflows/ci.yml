@@ -49,16 +49,34 @@ jobs:
       - name: Build pinned Lake project
         run: lake build
 
-      - name: Reject sorry and custom axioms
+      - name: Reject admitted proofs, custom axioms, and native_decide
         run: ./scripts/check-lean-trust.sh
 
-      - name: Print theorem axiom dependencies
+      - name: Audit theorem axiom dependencies
+        shell: bash
         run: |
           lake env lean audit/AxiomAudit.lean | tee axiom-report.txt
-          if grep -q 'sorryAx' axiom-report.txt; then
-            echo 'ERROR: sorryAx detected in exported theorem dependencies.' >&2
-            exit 1
-          fi
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          allowed = {"propext", "Classical.choice", "Quot.sound"}
+          unexpected: list[tuple[str, list[str]]] = []
+
+          for line in Path("axiom-report.txt").read_text(encoding="utf-8").splitlines():
+              match = re.search(r"depends on axioms: \[(.*)\]$", line)
+              if match is None:
+                  continue
+              dependencies = [item.strip() for item in match.group(1).split(",") if item.strip()]
+              bad = [item for item in dependencies if item not in allowed]
+              if bad:
+                  unexpected.append((line, bad))
+
+          if unexpected:
+              for line, bad in unexpected:
+                  print(f"ERROR: unexpected Lean axiom dependency {bad}: {line}")
+              raise SystemExit(1)
+          PY
 
   python:
     name: Python deterministic core
