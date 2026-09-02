@@ -19,6 +19,7 @@ FORBIDDEN: dict[str, str] = {
     "sorryAx": "direct Lean.sorryAx trust",
     "axiom": "custom axiom declaration",
     "constant": "custom axiom-like constant declaration",
+    "opaque": "opaque declaration forbidden by the trusted core",
     "native_decide": "native_decide / Lean.ofReduceBool trust",
     "ofReduceBool": "direct Lean.ofReduceBool trust",
 }
@@ -27,6 +28,23 @@ FORBIDDEN: dict[str, str] = {
 # spell a Lean keyword (for example `«sorry»`). These two names are different:
 # quoted spelling can resolve directly to the same trusted-base escape hatches.
 FORBIDDEN_QUOTED = {"sorryAx", "ofReduceBool"}
+
+
+def is_identifier_start(char: str) -> bool:
+    if char == "_":
+        return True
+    category = unicodedata.category(char)
+    return category.startswith("L") or category == "Nl"
+
+
+def is_identifier_continue(char: str) -> bool:
+    # Lean conventionally permits apostrophe, question-mark, and bang suffixes
+    # in identifiers. Treat them as continuation characters so `sorry!` and
+    # `native_decide?` are not confused with the forbidden bare tokens.
+    if char in {"_", "'", "?", "!"}:
+        return True
+    category = unicodedata.category(char)
+    return category[0] in {"L", "M", "N"}
 
 
 def discover_lean_files(root: Path) -> list[Path]:
@@ -54,9 +72,12 @@ def blank_like(source: str) -> list[str]:
 def mask_noncode(source: str) -> str:
     """Preserve executable Lean code while masking comments and string literals.
 
-    Interpolation expressions inside s!"...{ code }..." remain executable code and
-    are therefore preserved and scanned recursively. Raw strings are consumed
-    through their full hash-delimited terminator.
+    Identifier-bang interpolation macros such as s!"...", m!"...", f!"...",
+    v!"...", and project-defined macros with the same lexical shape preserve
+    their {...} expressions as executable code. Context-sensitive interpolation
+    forms are additionally covered by the package-level warningAsError compiler
+    backstop, so an admission parsed by Lean cannot remain a non-fatal warning.
+    Raw strings are consumed through their full hash-delimited terminator.
     """
 
     out = blank_like(source)
@@ -130,8 +151,31 @@ def mask_noncode(source: str) -> str:
                 out[offset] = char
         return min(cursor + 1, n)
 
+    def interpolation_macro_quote(index: int) -> int | None:
+        """Return the quote in identifier!"...", else None.
+
+        Lean ships multiple interpolation macros (`s!`, `m!`, `f!`, `v!`) and
+        projects can define more. Recognizing the lexical family rather than a
+        hard-coded prefix list prevents a new identifier-bang macro from silently
+        turning an executable interpolation into an ordinary masked string.
+        """
+
+        if index >= n or not is_identifier_start(source[index]):
+            return None
+        cursor = index + 1
+        while cursor < n and is_identifier_continue(source[cursor]):
+            cursor += 1
+        if (
+            cursor < n
+            and source[cursor] == '"'
+            and cursor > index
+            and source[cursor - 1] == "!"
+        ):
+            return cursor
+        return None
+
     def scan_interpolated_string(index: int) -> int:
-        # index points immediately after the opening quote in s!".
+        # index points immediately after the opening quote.
         while index < n:
             if source[index] == "\\":
                 index += 2
@@ -162,12 +206,13 @@ def mask_noncode(source: str) -> str:
                 index = raw_end
                 continue
 
-            if source.startswith('s!"', index):
-                # Preserve the interpolation introducer as code, mask literal
+            interpolation_quote = interpolation_macro_quote(index)
+            if interpolation_quote is not None:
+                # Preserve the interpolation macro token as code, mask literal
                 # text, and recursively preserve each {...} expression.
-                out[index] = "s"
-                out[index + 1] = "!"
-                index = scan_interpolated_string(index + 3)
+                for offset in range(index, interpolation_quote):
+                    out[offset] = source[offset]
+                index = scan_interpolated_string(interpolation_quote + 1)
                 continue
             if source[index] == '"':
                 index = mask_plain_string(index)
@@ -189,23 +234,6 @@ def mask_noncode(source: str) -> str:
 
     scan_code(0)
     return "".join(out)
-
-
-def is_identifier_start(char: str) -> bool:
-    if char == "_":
-        return True
-    category = unicodedata.category(char)
-    return category.startswith("L") or category == "Nl"
-
-
-def is_identifier_continue(char: str) -> bool:
-    # Lean conventionally permits apostrophe, question-mark, and bang suffixes
-    # in identifiers. Treat them as continuation characters so `sorry!` and
-    # `native_decide?` are not confused with the forbidden bare tokens.
-    if char in {"_", "'", "?", "!"}:
-        return True
-    category = unicodedata.category(char)
-    return category[0] in {"L", "M", "N"}
 
 
 def identifiers(code: str):
@@ -239,7 +267,13 @@ def violations_in(source: str) -> list[tuple[int, str, str]]:
 assert violations_in("axiom\nbogus : False\n")
 assert violations_in("@[simp] axiom\nbogus : False\n")
 assert violations_in("constant bogus : False\n")
+assert violations_in("opaque bogus : False\n")
+assert violations_in("opaque implementationHidden : Nat := 0\n")
 assert violations_in('def hidden : String := s!"{(sorry : Nat)}"\n')
+assert violations_in('def hidden : MessageData := m!"{(sorry : Nat)}"\n')
+assert violations_in('def hidden : Format := f!"{(sorry : Nat)}"\n')
+assert violations_in('def hidden := v!"{(sorry : Nat)}"\n')
+assert violations_in('def hidden := projectMacro!"{(sorry : Nat)}"\n')
 assert violations_in("theorem trustBypass : False := sorryAx False true\n")
 assert violations_in("theorem trustBypass : False := Lean.sorryAx False true\n")
 assert violations_in("theorem trustBypass : False := Lean.«sorryAx» False true\n")
@@ -249,12 +283,13 @@ assert not violations_in("def native_decide' : Nat := 0\n")
 assert not violations_in("def sorry' : Nat := 0\n")
 assert not violations_in("def native_decide? : Nat := 0\n")
 assert not violations_in("def sorry! : Nat := 0\n")
-assert not violations_in("-- sorry axiom constant native_decide sorryAx\ndef ok := 0\n")
-assert not violations_in('/- nested /- sorry -/ axiom constant -/\ndef ok := 0\n')
-assert not violations_in('def note := "sorry axiom constant native_decide sorryAx"\n')
-assert not violations_in('def note := r#"literal \\"sorry\\" and axiom text"#\n')
-assert not violations_in('def note := r##"literal "sorry" # axiom sorry"##\n')
+assert not violations_in("-- sorry axiom constant opaque native_decide sorryAx\ndef ok := 0\n")
+assert not violations_in('/- nested /- sorry -/ axiom constant opaque -/\ndef ok := 0\n')
+assert not violations_in('def note := "sorry axiom constant opaque native_decide sorryAx"\n')
+assert not violations_in('def note := r#"literal \\"sorry\\" and axiom opaque text"#\n')
+assert not violations_in('def note := r##"literal "sorry" # axiom opaque sorry"##\n')
 assert not violations_in('def note := s!"literal sorry, but {1 + 1} is code"\n')
+assert not violations_in('def note := m!"literal sorry, but {1 + 1} is code"\n')
 assert not violations_in("def «sorry» : Nat := 0\n")
 assert not violations_in("def «axiom» : Nat := 0\n")
 
@@ -292,7 +327,7 @@ if violations:
     raise SystemExit(1)
 
 print(
-    "Lean trust gate passed: no admitted proofs, custom axioms/constants, "
-    "native-evaluator trust, or reviewed scanner bypasses."
+    "Lean trust gate passed: no admitted proofs, custom axioms/constants/opaque "
+    "declarations, native-evaluator trust, or reviewed scanner bypasses."
 )
 PY
