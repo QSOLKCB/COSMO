@@ -1,19 +1,42 @@
 name: COSMO CI
 
 on:
+  # PR branches are validated by the pull_request event. Restrict push CI to
+  # main so each PR commit does not consume a second, duplicate workflow run.
   push:
+    branches:
+      - main
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# A newer commit to the same PR supersedes the older validation run. This keeps
+# CI focused on the head that can actually be merged while preserving main runs.
+concurrency:
+  group: cosmo-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LC_ALL: C.UTF-8
+  LANG: C.UTF-8
+  TZ: UTC
+  PYTHONHASHSEED: "0"
+
 jobs:
   lean:
     name: Lean 4 formal integrity
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # COSMO's current integrity checks do not depend on Git history.
+          # Keep the checkout shallow unless a future provenance check requires
+          # the QEC-style fetch-depth: 0 contract explicitly.
+          fetch-depth: 1
 
       - name: Install pinned Lean toolchain
         shell: bash
@@ -39,10 +62,13 @@ jobs:
 
   python:
     name: Python deterministic core
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v5
