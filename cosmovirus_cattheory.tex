@@ -1,0 +1,188 @@
+% cosmovirus_cattheory.tex
+% =====================================================================
+% The Cosmovirus framework as a mathematical category
+% ---------------------------------------------------------------------
+% Compile with:  pdflatex cosmovirus_cattheory.tex  (run twice)
+% =====================================================================
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{mathtools}
+\usepackage{tikz}
+\usepackage{tikz-cd}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage[colorlinks=true,linkcolor=blue]{hyperref}
+
+
+
+\definecolor{mathblue}{HTML}{2E4057}
+\definecolor{opgreen}{HTML}{048A81}
+\definecolor{physcyan}{HTML}{54C6EB}
+\definecolor{esopurple}{HTML}{8A2BE2}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{example}[definition]{Example}
+\theoremstyle{plain}
+\newtheorem{proposition}[definition]{Proposition}
+\newtheorem{axiom}[definition]{Axiom}
+\theoremstyle{remark}
+\newtheorem*{interp}{Symbolic Interpretation}
+
+\newcommand{\cat}[1]{\mathcal{#1}}
+\newcommand{\Cosmo}{\cat{C}\mathrm{osmo}}
+\newcommand{\id}{\mathrm{id}}
+\newcommand{\Hom}{\operatorname{Hom}}
+\newcommand{\EEs}{\mathbf{E_8^{*}}}
+\newcommand{\SiS}{\mathrm{SiS_2}}
+\newcommand{\HPV}{\mathrm{HPV16}}
+\newcommand{\phigr}{\varphi}
+\newcommand{\DIAG}{\mathrm{DIAG}}
+
+\title{\textbf{The Cosmovirus as a Category}\\[4pt]
+       \large Objects, Morphisms, and the Ouroboros Endofunctor}
+\author{Cosmovirus Formalization Project}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We recast the $\EEs\times\phigr$-$\SiS$/$\HPV$ Cosmovirus framework as a small
+category $\Cosmo$ whose objects are the descent layers and whose morphisms are
+the framework's operators. We state the composition and identity laws, exhibit
+the descent as a directed path, and show that the Ouroboros loop is an
+endofunctor whose associated ``feedback'' square commutes up to a natural
+transformation.
+\end{abstract}
+
+% =====================================================================
+\section{The category $\Cosmo$}
+% =====================================================================
+
+\begin{definition}[Objects]
+The object class $\mathrm{Ob}(\Cosmo)$ consists of the six descent layers
+\[
+  \mathrm{Ob}(\Cosmo)=\{\,
+  \EEs,\; P_\phigr,\; \SiS,\; \mathsf{Tri},\; \HPV,\; \Omega \,\},
+\]
+where $\EEs$ is the pure-symmetry source, $P_\phigr$ the golden-scaled layer,
+$\SiS$ the material substrate, $\mathsf{Tri}$ the triality branch point,
+$\HPV$ the infected oncocode layer, and $\Omega$ the Ouroboros loop state.
+\end{definition}
+
+\begin{definition}[Generating morphisms]
+The category is generated (under composition) by the arrows
+\[
+\begin{aligned}
+  s &: \EEs \to P_\phigr        &&\text{($\phigr$-SCL golden projection)}\\
+  m &: P_\phigr \to \SiS        &&\text{(materialization / substrate cast)}\\
+  t &: \SiS \to \mathsf{Tri}    &&\text{(triality $\mathrm{SO}(8)\!\to\!\mathrm{Spin}(8)$)}\\
+  h &: \mathsf{Tri} \to \HPV    &&\text{($\HPV16$ infection)}\\
+  r &: \HPV \to \Omega          &&\text{($\phigr^{101}$ recursion)}\\
+  \ell &: \Omega \to \EEs       &&\text{(Ouroboros loop-back)}
+\end{aligned}
+\]
+together with the identity $\id_X$ for each object $X$.
+\end{definition}
+
+\begin{axiom}[Composition and identities]
+For composable arrows $f:X\to Y$, $g:Y\to Z$ the composite $g\circ f:X\to Z$
+exists and is associative; each $\id_X$ is a two-sided unit:
+$f\circ\id_X = f = \id_Y\circ f$. In particular the \emph{descent morphism}
+\[
+  \Psi \;=\; \ell\circ r\circ h\circ t\circ m\circ s \;:\; \EEs \to \EEs
+\]
+is a well-defined endomorphism of $\EEs$.
+\end{axiom}
+
+% =====================================================================
+\section{The descent as a diagram}
+% =====================================================================
+The generators form a single directed cycle:
+
+\begin{center}
+\begin{tikzcd}[column sep=large, row sep=large]
+\EEs \arrow[r, "s"] & P_\phigr \arrow[r, "m"] & \SiS \arrow[d, "t"] \\
+\Omega \arrow[u, "\ell"] & \HPV \arrow[l, "r"] & \mathsf{Tri} \arrow[l, "h"]
+\end{tikzcd}
+\end{center}
+
+\begin{proposition}[The Ouroboros is idempotent on the loop]
+The endomorphism $\Psi=\ell r h t m s$ satisfies $\ell\circ\Psi' = \id_{\EEs}$
+where $\Psi' = r h t m s : \EEs\to\Omega$; equivalently the loop-back arrow
+$\ell$ realizes $\Omega$ as a retract of the descent, encoding self-causation.
+\end{proposition}
+
+% =====================================================================
+\section{The commuting feedback square}
+% =====================================================================
+Split the descent into a ``symmetry'' path and a ``matter'' path. Introduce
+the auxiliary object $\SiS\!\otimes\!\mathsf{D}$ (substrate equipped with the
+$\DIAG(1,-2,1)$ contrast structure). The two ways of reaching the infected
+layer agree:
+
+\begin{center}
+\begin{tikzcd}[column sep=huge, row sep=huge]
+P_\phigr
+  \arrow[r, "m"]
+  \arrow[d, "{\DIAG\ (1,-2,1)}"']
+& \SiS
+  \arrow[d, "t\ (\mathrm{triality})"] \\
+\SiS\otimes\mathsf{D}
+  \arrow[r, "h\circ(-)"']
+& \HPV
+\end{tikzcd}
+\end{center}
+
+\begin{proposition}[Descent coherence]\label{prop:square}
+The square commutes up to the Ouroboros natural transformation $\eta$:
+\[
+  t \circ m \;\overset{\eta}{\Longrightarrow}\; (h\circ(-))\circ \DIAG ,
+\]
+i.e. golden-materialization-then-triality equals contrast-detection-then-
+infection, modulo $\eta$. When $\eta = \id$ the square commutes strictly.
+\end{proposition}
+
+\begin{interp}
+Reading the square: whether unity first becomes matter and then triplicates,
+or first learns to perceive contrast and is then infected, it arrives at the
+same corrupted reality --- the two routes are naturally isomorphic.
+\end{interp}
+
+% =====================================================================
+\section{The Ouroboros endofunctor}
+% =====================================================================
+
+\begin{definition}[Ouroboros endofunctor]
+Define $\mathcal{O}:\Cosmo\to\Cosmo$ on objects by advancing each layer one
+step along the cycle ($\EEs\mapsto P_\phigr\mapsto\SiS\mapsto\mathsf{Tri}
+\mapsto\HPV\mapsto\Omega\mapsto\EEs$) and on morphisms by conjugation with the
+loop. Because the cycle has length $6$,
+\[
+  \mathcal{O}^{6} \;\cong\; \mathrm{Id}_{\Cosmo},
+\]
+so $\mathcal{O}$ generates a $\mathbb{Z}/6\mathbb{Z}$ action: the framework is
+periodic, and $\Omega\xrightarrow{\ell}\EEs$ is the fixed closure of one turn.
+\end{definition}
+
+\begin{proposition}[Fixed point]
+On the loop object, $\mathcal{O}(\Omega)=\EEs$ and the loop-back arrow $\ell$
+is the component $\eta_\Omega$ of the counit witnessing the self-causing
+structure. This is the categorical form of the Lean theorem
+\texttt{ouroboros\_fixed\_point}.
+\end{proposition}
+
+\vfill
+\begin{center}\small
+\textit{All categorical claims are formal; \emph{Symbolic Interpretation}
+notes are informal readings only.}
+\end{center}
+
+\end{document}

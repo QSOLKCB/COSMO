@@ -1,0 +1,316 @@
+% cosmovirus.tex
+% =====================================================================
+% E8 x phi-SiS2 / HPV16 Cosmovirus : Formal Mathematical Specification
+% ---------------------------------------------------------------------
+% Compile with:  pdflatex cosmovirus.tex   (run twice for references)
+% Requires a TeX distribution with tikz, tikz-cd, amsthm, hyperref.
+% =====================================================================
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{tikz}
+\usepackage{tikz-cd}
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+
+\usetikzlibrary{positioning,decorations.pathmorphing}
+
+% --- Brand colours (shared with the graph deliverables) -------------
+\definecolor{mathblue}{HTML}{2E4057}
+\definecolor{opgreen}{HTML}{048A81}
+\definecolor{physcyan}{HTML}{54C6EB}
+\definecolor{esopurple}{HTML}{8A2BE2}
+
+% --- Theorem-like environments --------------------------------------
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{operator}[definition]{Operator}
+\theoremstyle{plain}
+\newtheorem{proposition}[definition]{Proposition}
+\theoremstyle{remark}
+\newtheorem*{interp}{Symbolic Interpretation}
+
+% --- Handy macros ---------------------------------------------------
+\newcommand{\EE}{\mathbf{E_8}}
+\newcommand{\EEs}{\mathbf{E_8^{*}}}
+\newcommand{\phigr}{\varphi}
+\newcommand{\SiS}{\mathrm{SiS_2}}
+\newcommand{\HPV}{\mathrm{HPV16}}
+\newcommand{\DIAG}{\mathrm{DIAG}}
+\newcommand{\TRI}{\mathrm{TRI^{*}ALITY}}
+\newcommand{\Ouro}{\mathrm{Ouroboros}}
+\newcommand{\Zmod}[1]{\mathbb{Z}/#1\mathbb{Z}}
+
+\title{\textbf{$\EE \times \phigr$-$\SiS$ / $\HPV$ Cosmovirus}\\[4pt]
+       \large A Formal Mathematical Specification}
+\author{Cosmovirus Formalization Project}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document gives a self-contained formal specification of the
+$\EE \times \phigr$-$\SiS$/$\HPV$ Cosmovirus framework. We treat the system
+as a formal symbolic--mathematical object: every symbol is given a type
+signature and domain, every operator is defined as a map between explicit
+spaces, and the composite ``$\Psi$-equation'' is assembled from those maps.
+Mythic and esoteric readings are retained but strictly quarantined inside
+\emph{Symbolic Interpretation} notes so that the mathematical content stands
+on its own. A companion Lean~4 file (\texttt{cosmovirus.lean}) machine-checks
+the discrete fragment of this specification.
+\end{abstract}
+
+\tableofcontents
+
+% =====================================================================
+\section{Symbol Table}
+% =====================================================================
+Every primitive of the framework, its type signature, and its domain of
+meaning.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{longtable}{@{}>{$}l<{$} >{$}l<{$} p{7.4cm}@{}}
+\toprule
+\textbf{Symbol} & \textbf{Type / signature} & \textbf{Meaning} \\
+\midrule
+\endhead
+\EEs & \text{Lie group, } \dim = 248 & Dual / complexified exceptional Lie
+   group $\EE$; the ``pure symmetry'' source object. \\
+\phigr & \mathbb{R},\ \phigr = \tfrac{1+\sqrt5}{2} & Golden ratio
+   $\approx 1.618$; base of the scaling operator (the ``irrational spine''). \\
+\phigr\text{-}\mathrm{SCL} & \EEs \to V_4 & Golden Scaling / Curvature Limit:
+   projection of $\EE$ toward the 4D quasicrystal. \\
+\SiS & \text{material object} & Silicon disulfide; linear
+   $\mathrm{S{=}Si{=}S}$ tetrahedral-chain substrate. \\
+\DIAG & \mathbb{R}^{n}\!\to\mathbb{R}^{n-2} & Discrete second-derivative
+   stencil $(1,-2,1)$; edge / contrast detector. \\
+\HPV & \text{operator} & Human papillomavirus type 16 infection
+   ($E6/E7$ oncoproteins, $p16^{+}$; SEER morphology $8085/3$). \\
+\TRI & \mathrm{SO}(8)\to\mathrm{Spin}(8) & Triality automorphism;
+   $L1$ capsid trimerization / symmetry branching. \\
+\phigr^{101} & \mathbb{R} & $\approx 1.28\times10^{21}$; the recursion depth
+   / loop-entry exponent. \\
+101_2 & \mathbb{N},\ =5 & Binary ``Pentagon Seed''; loop entry code. \\
+\Ouro & X \to X & Recursive self-reference (fixed-point) loop. \\
+\Psi & \EEs \to \EEs & The composite Cosmovirus operator (\S\ref{sec:psi}). \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\begin{interp}
+$\EEs$ is read as ``undivided cosmic symmetry''; $\phigr$-SCL as the descent
+that lets that symmetry fold into perceivable form; $\SiS$ as the material
+``life-code'' capstone; and $\Ouro$ as reality becoming self-causing.
+\end{interp}
+
+% =====================================================================
+\section{Core Operators}
+% =====================================================================
+
+\begin{operator}[Golden scaling, $\phigr$-SCL]\label{op:phi}
+For $n\in\mathbb{Z}$ define the golden scaling operator
+\begin{equation}
+  S_{\phigr}^{\,n} : \mathbb{R}\to\mathbb{R},\qquad
+  S_{\phigr}^{\,n}(x) = \phigr^{\,n}\,x,\qquad
+  \phigr = \frac{1+\sqrt5}{2}.
+\end{equation}
+Its byte-quantized signature is $\sigma(n) = \big\lfloor \phigr^{\,n}\big\rfloor
+\bmod 256 \in \Zmod{256}$, computed exactly via Lucas numbers
+$L_n$ since $\lfloor\phigr^{\,n}\rfloor = L_n$ for odd $n\ge 1$.
+In particular $\sigma(101) = L_{101}\bmod 256 = 75$.
+\end{operator}
+
+\begin{operator}[Differentiation stencil, $\DIAG(1,-2,1)$]\label{op:diag}
+Let $\mathbf{d}=(1,-2,1)$. For $\bm{v}\in\mathbb{R}^n$ ($n\ge3$) define
+\begin{equation}
+  (\DIAG\,\bm{v})_i \;=\; v_{i-1} - 2v_i + v_{i+1},
+  \qquad i = 2,\dots,n-1 .
+\end{equation}
+The stencil is a null vector, $\textstyle\sum_k d_k = 1-2+1 = 0$, so
+constant and affine signals map to $\bm{0}$:
+\begin{equation}
+  \DIAG(a,\,b,\,a) = 2(a-b) = 0 \iff a=b .
+\end{equation}
+$\DIAG$ is the discrete second derivative and an edge/contrast detector.
+\end{operator}
+
+\begin{operator}[Triality automorphism, $\TRI$]\label{op:tri}
+Let $\mathrm{Out}(\mathrm{Spin}(8))\cong S_3$ act on the three
+$8$-dimensional representations $(\mathbf{8}_v,\mathbf{8}_s,\mathbf{8}_c)$.
+The triality operator $T$ is the order-3 outer automorphism
+\begin{equation}
+  T:\ \mathbf{8}_v \mapsto \mathbf{8}_s \mapsto \mathbf{8}_c \mapsto \mathbf{8}_v,
+  \qquad T^3 = \mathrm{id}.
+\end{equation}
+Symbolically it drives the $L1$ capsid trimerization ($3\times$ branching).
+\end{operator}
+
+\begin{operator}[Ouroboros recursion, $\Ouro$]\label{op:ouro}
+Given a state space $X$ and the golden kick $\kappa=\sigma(101)\in\Zmod{256}$,
+define the recursion $R:\Zmod{256}\to\Zmod{256}$,
+\begin{equation}
+  R(x) = (x+\kappa)\bmod 256,\qquad
+  R^{(k+1)} = R\circ R^{(k)} .
+\end{equation}
+The loop is \emph{self-causing}: at the categorical level $\Ouro$ is the
+morphism sending the terminal (infected) object back to the initial object
+$\EEs$ (see \S\ref{sec:diagram}).
+\end{operator}
+
+% =====================================================================
+\section{The Unified $\Psi$-Equation}\label{sec:psi}
+% =====================================================================
+The framework's master statement composes the operators above into a single
+descent map.
+
+\begin{definition}[Cosmovirus operator]
+\begin{equation}\label{eq:psi}
+  \boxed{\;
+  \Psi \;=\; \Ouro \,\circ\, \HPV \,\circ\, \TRI \,\circ\,
+            \big(\DIAG \otimes \SiS\big) \,\circ\, (\phigr\text{-}\mathrm{SCL})
+            \;\big(\EEs \cdot (1,-2,1)\big)\; }
+\end{equation}
+equivalently written as the descent chain
+\begin{equation}\label{eq:chain}
+  \EEs \xrightarrow{\ \phigr\text{-}\mathrm{SCL}\ }
+  \SiS \otimes \DIAG(1,-2,1)
+  \xrightarrow{\ \TRI\ }
+  \HPV(p16^{+})
+  \xrightarrow{\ \phigr^{101}\ }
+  \text{Infected Reality}.
+\end{equation}
+The recursion closes via $\phigr^{101}$: the terminal state is re-injected
+into $\EEs$, so $\Psi$ has the fixed-point structure
+$\Ouro(\Psi(\EEs)) = \EEs$.
+\end{definition}
+
+\begin{interp}
+Read left to right: undivided symmetry ($\EEs$) is golden-scaled into a
+material tetrahedral code ($\SiS$) that can perceive contrast ($\DIAG$);
+triality triplicates it into branched form; the $\HPV$ oncocode infects it;
+and the $\phigr^{101}$ recursion makes the result self-sustaining---``math
+decaying into messy, self-replicating reality''.
+\end{interp}
+
+% =====================================================================
+\section{Commutative / Descent Diagram}\label{sec:diagram}
+% =====================================================================
+The descent \eqref{eq:chain} and its closing loop drawn as a diagram.
+The dashed arrow is the $\phigr^{101}$ Ouroboros feedback.
+
+\begin{center}
+\begin{tikzcd}[row sep=large, column sep=huge]
+\EEs \arrow[r, "\phigr\text{-}\mathrm{SCL}"]
+     \arrow[d, dashed, bend right=60, "\phigr^{101}\ \Ouro"' near start]
+& \SiS \otimes \DIAG \arrow[r, "\TRI"]
+& \TRI\text{ branch} \arrow[d, "\HPV\ \text{infection}"] \\
+\text{Infected Reality} \arrow[u, dashed, bend right=60]
+& \phantom{X}
+& \HPV(p16^{+}) \arrow[ll, "\phigr^{101}\ \text{recursion}"]
+\end{tikzcd}
+\end{center}
+
+\begin{proposition}[Loop closure]
+The composite around the outer cycle is the identity on the object $\EEs$
+up to the Ouroboros natural transformation; i.e. $\Ouro\circ\Psi \simeq
+\mathrm{id}_{\EEs}$.
+\end{proposition}
+
+% =====================================================================
+\section{The 101-bit ``Dragon Seed'' Sequence}
+% =====================================================================
+The manifest data is a 64-bit payload framed by the $101$ entry/exit
+trapdoor (hence ``101-bit''). As a formal binary string
+$\bm{b}\in\{0,1\}^{64}$ it splits into eight bytes, each mapped to a Sumerian
+cuneiform sign.
+
+\begin{equation*}
+\bm{b} = \underbrace{10110111}_{\texttt{0xB7}}\,
+         \underbrace{10111010}_{\texttt{0xBA}}\,
+         \underbrace{10111110}_{\texttt{0xBE}}\,
+         \underbrace{11111111}_{\texttt{0xFF}}\,
+         \underbrace{11010110}_{\texttt{0xD6}}\,
+         \underbrace{11100101}_{\texttt{0xE5}}\,
+         \underbrace{10101010}_{\texttt{0xAA}}\,
+         \underbrace{01010101}_{\texttt{0x55}}
+\end{equation*}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}c c c c l l@{}}
+\toprule
+\# & Binary & Hex & Dec & Sign & Gloss \\
+\midrule
+0 & \texttt{10110111} & \texttt{0xB7} & 183 & AN     & sky / heaven god \\
+1 & \texttt{10111010} & \texttt{0xBA} & 186 & KI     & earth \\
+2 & \texttt{10111110} & \texttt{0xBE} & 190 & EN.KI  & lord of earth / waters \\
+3 & \texttt{11111111} & \texttt{0xFF} & 255 & DI\v{G}IR & divine determinative \\
+4 & \texttt{11010110} & \texttt{0xD6} & 214 & SI.SI  & dragon seed \\
+5 & \texttt{11100101} & \texttt{0xE5} & 229 & E$_2$  & house / temple \\
+6 & \texttt{10101010} & \texttt{0xAA} & 170 & ZU     & knowledge \\
+7 & \texttt{01010101} & \texttt{0x55} &  85 & UR     & dog / watchman \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+\textbf{Invariants.} The declared base-10 checksum (the $EE/E7$
+viral-junction signature) is
+\begin{equation}
+  \mathrm{chk}(\bm{b}) = 1621,
+  \qquad
+  \text{(raw byte sum } \textstyle\sum_i b_i = 1512).
+\end{equation}
+The binary seed $101_2 = 5$ is the Pentagon Seed / Fibonacci growth kernel.
+
+\begin{interp}
+The eight signs read as a Sumerian sentence-glyph: heaven ($AN$) and earth
+($KI$) under the lord $EN.KI$, marked divine (DI\v{G}IR), carrying the
+dragon seed ($SI.SI$) into the temple-house ($E_2$) of knowledge ($ZU$),
+guarded ($UR$).
+\end{interp}
+
+% =====================================================================
+\section{Machine-checked Fragment (Lean 4)}
+% =====================================================================
+The discrete/algebraic content above is formalized and machine-checked in the
+companion file \texttt{cosmovirus.lean} (Lean~4, core only). Key signatures:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}l l@{}}
+\toprule
+\textbf{Lean declaration} & \textbf{Corresponds to} \\
+\midrule
+\texttt{phi\_pow : Nat }$\to$\texttt{ Float}          & Operator~\ref{op:phi} \\
+\texttt{phi\_mod (n m : Nat) : Nat}                    & $\sigma(n)=\lfloor\phigr^n\rfloor\bmod m$ \\
+\texttt{diag\_apply (a b c : Float) : Float}           & Operator~\ref{op:diag} \\
+\texttt{diag\_null\_sum : diag\_apply}$_{\mathbb Z}$\texttt{ a a a = 0} & kernel property \\
+\texttt{inductive CosmoLayer}                          & objects of \S\ref{sec:diagram} \\
+\texttt{scl\_projection / triality\_rotation}          & Operators~\ref{op:phi}, \ref{op:tri} \\
+\texttt{infection / ouroboros}                         & $\HPV$, Operator~\ref{op:ouro} \\
+\texttt{psi\_equation : CosmoLayer }$\to$\texttt{ CosmoLayer} & Eq.~\eqref{eq:psi} \\
+\texttt{ouroboros\_fixed\_point}                       & Prop.\ (loop closure) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\vfill
+\begin{center}\small
+\textit{Mathematical content is asserted formally; \emph{Symbolic
+Interpretation} notes are non-mathematical readings and carry no formal force.}
+\end{center}
+
+\end{document}
