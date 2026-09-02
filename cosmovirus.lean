@@ -51,18 +51,23 @@ def phiFloorQuantized (n : Nat) : Nat :=
   else
     lucas n
 
-/-- Byte-style modular reduction of the exact quantized integer. -/
-def phiFloorMod (n m : Nat) : Nat :=
+/--
+Modular reduction of the exact quantized integer.
+
+The proof argument makes the mathematical precondition explicit and keeps the
+Lean API aligned with the Python implementation, which rejects a zero modulus.
+-/
+def phiFloorMod (n m : Nat) (_hm : 0 < m) : Nat :=
   phiFloorQuantized n % m
 
 theorem lucas_101_value : lucas 101 = 1281597540372340914251 := by
-  native_decide
+  decide
 
 theorem lucas_101_mod_256 : lucas 101 % 256 = 75 := by
-  native_decide
+  decide
 
-theorem phi_floor_101_mod_256 : phiFloorMod 101 256 = 75 := by
-  native_decide
+theorem phi_floor_101_mod_256 : phiFloorMod 101 256 (by decide) = 75 := by
+  decide
 
 /-! ## 2. DIAG (1, -2, 1) discrete second difference -/
 
@@ -76,7 +81,7 @@ structure DiagOperator where
 def diag : DiagOperator := {}
 
 theorem diag_coeff_sum : diag.c₀ + diag.c₁ + diag.c₂ = 0 := by
-  native_decide
+  decide
 
 /-- Exact integer second difference. -/
 def diagApplyInt (a b c : Int) : Int :=
@@ -164,17 +169,17 @@ def dragonSeedByteSum : Nat :=
 def declaredSymbolicInvariant : Nat := 1621
 
 theorem dragon_seed_length : dragonSeed.toList.length = 8 := by
-  native_decide
+  decide
 
 theorem dragon_seed_bit_length : 8 * dragonSeed.toList.length = 64 := by
-  native_decide
+  decide
 
 theorem dragon_seed_byte_sum : dragonSeedByteSum = 1512 := by
-  native_decide
+  decide
 
 theorem declared_invariant_ne_byte_sum :
     declaredSymbolicInvariant ≠ dragonSeedByteSum := by
-  native_decide
+  decide
 
 /-- Project-defined symbolic sign annotation by byte position. -/
 def cuneiformAnnotation (i : Fin 8) : String :=
