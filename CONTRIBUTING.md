@@ -24,7 +24,9 @@ lake build
 lake env lean audit/AxiomAudit.lean
 ```
 
-Project-authored `sorry` and custom `axiom` declarations are not accepted in the trusted core. If a future theorem requires assumptions, make the assumptions explicit in the theorem statement or propose a reviewed axiom-policy change rather than hiding the dependency.
+The trusted core rejects project-authored `sorry`, `admit`, custom `axiom` declarations, and `native_decide`. Arithmetic decision proofs should use kernel reduction (`decide`) or another proof-producing tactic. CI also checks exported theorem dependencies against the reviewed allow-list `propext`, `Classical.choice`, and `Quot.sound`.
+
+If a future theorem requires assumptions, make them explicit in the theorem statement or propose a reviewed axiom-policy change rather than hiding the dependency.
 
 ## Python changes
 
