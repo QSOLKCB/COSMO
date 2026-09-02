@@ -1,165 +1,246 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mapfile -t lean_files < <(
-  find . -path './.lake' -prune -o -type f -name '*.lean' -print
-)
-
-if ((${#lean_files[@]} == 0)); then
-  echo 'ERROR: no project Lean files found.' >&2
-  exit 1
-fi
-
-# Scan each Lean source as one continuous token stream rather than line by line.
-# This catches declarations such as:
-#
-#   axiom
-#   bogus : False
-#
-# while masking Lean line comments, nested block/doc comments, and strings so
-# documentation text does not become a false trust violation.
-python3 - "${lean_files[@]}" <<'PY'
+# Keep the trust scanner self-contained and lexical rather than relying on
+# line-oriented grep. Lean permits executable syntax inside interpolated strings,
+# apostrophes in identifiers, and source modules exposed through symlinks.
+python3 <<'PY'
 from __future__ import annotations
 
-import re
 import sys
+import tempfile
+import unicodedata
 from pathlib import Path
-from typing import Pattern
 
-IDENT = r"A-Za-z0-9_"
-RULES: tuple[tuple[str, Pattern[str]], ...] = (
-    (
-        "admitted proof (sorry/admit)",
-        re.compile(rf"(?<![{IDENT}])(?:sorry|admit)(?![{IDENT}])"),
-    ),
-    (
-        "custom axiom declaration",
-        # Lean accepts any whitespace, including a newline, between `axiom`
-        # and the declaration that follows it.
-        re.compile(rf"(?<![{IDENT}])axiom(?=\s)"),
-    ),
-    (
-        "native_decide / Lean.ofReduceBool trust",
-        re.compile(rf"(?<![{IDENT}])native_decide(?![{IDENT}])"),
-    ),
-)
+FORBIDDEN: dict[str, str] = {
+    "sorry": "admitted proof (sorry/admit/sorryAx)",
+    "admit": "admitted proof (sorry/admit/sorryAx)",
+    "sorryAx": "direct Lean.sorryAx trust",
+    "axiom": "custom axiom declaration",
+    "native_decide": "native_decide / Lean.ofReduceBool trust",
+    "ofReduceBool": "direct Lean.ofReduceBool trust",
+}
+
+
+def discover_lean_files(root: Path) -> list[Path]:
+    """Return project .lean paths, including symlinked source modules."""
+
+    files: list[Path] = []
+    for path in root.rglob("*.lean"):
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        if ".lake" in relative.parts:
+            continue
+        # is_file() follows a valid symlink; is_symlink() also keeps a dangling
+        # .lean link visible so the gate fails closed when read_text() is tried.
+        if path.is_file() or path.is_symlink():
+            files.append(path)
+    return sorted(files, key=lambda item: str(item))
+
+
+def blank_like(source: str) -> list[str]:
+    return ["\n" if char == "\n" else " " for char in source]
 
 
 def mask_noncode(source: str) -> str:
-    """Replace comments/string contents with spaces while preserving newlines."""
+    """Preserve executable Lean code while masking comments and string literals.
 
-    chars = list(source)
-    i = 0
+    Interpolation expressions inside s!"...{ code }..." remain executable code and
+    are therefore preserved and scanned recursively.
+    """
+
+    out = blank_like(source)
     n = len(source)
-    block_depth = 0
-    in_line_comment = False
-    in_string = False
 
-    def mask(index: int) -> None:
-        if chars[index] != "\n":
-            chars[index] = " "
+    def mask_line_comment(index: int) -> int:
+        index += 2
+        while index < n and source[index] != "\n":
+            index += 1
+        return index
 
-    while i < n:
-        if in_line_comment:
-            if source[i] == "\n":
-                in_line_comment = False
+    def mask_block_comment(index: int) -> int:
+        depth = 1
+        index += 2
+        while index < n and depth > 0:
+            if source.startswith("/-", index):
+                depth += 1
+                index += 2
+            elif source.startswith("-/", index):
+                depth -= 1
+                index += 2
             else:
-                mask(i)
-            i += 1
-            continue
+                index += 1
+        return index
 
-        if block_depth > 0:
-            if source.startswith("/-", i):
-                mask(i)
-                if i + 1 < n:
-                    mask(i + 1)
-                block_depth += 1
-                i += 2
+    def mask_plain_string(index: int) -> int:
+        # index points at the opening quote.
+        index += 1
+        while index < n:
+            if source[index] == "\\":
+                index += 2
                 continue
-            if source.startswith("-/", i):
-                mask(i)
-                if i + 1 < n:
-                    mask(i + 1)
-                block_depth -= 1
-                i += 2
+            if source[index] == '"':
+                return index + 1
+            index += 1
+        return index
+
+    def mask_quoted_identifier(index: int) -> int:
+        # Lean quoted identifiers such as «sorry» are identifiers, not keywords.
+        index += 1
+        while index < n:
+            if source[index] == "»":
+                return index + 1
+            index += 1
+        return index
+
+    def scan_interpolated_string(index: int) -> int:
+        # index points immediately after the opening quote in s!".
+        while index < n:
+            if source[index] == "\\":
+                index += 2
                 continue
-            mask(i)
-            i += 1
-            continue
-
-        if in_string:
-            if source[i] == "\\":
-                mask(i)
-                if i + 1 < n:
-                    mask(i + 1)
-                i += 2
+            if source.startswith("{{", index) or source.startswith("}}", index):
+                index += 2
                 continue
-            if source[i] == '"':
-                mask(i)
-                in_string = False
-                i += 1
+            if source[index] == "{":
+                out[index] = "{"
+                index = scan_code(index + 1, stop_at_closing_brace=True)
                 continue
-            mask(i)
-            i += 1
+            if source[index] == '"':
+                return index + 1
+            index += 1
+        return index
+
+    def scan_code(index: int, *, stop_at_closing_brace: bool = False) -> int:
+        while index < n:
+            if source.startswith("--", index):
+                index = mask_line_comment(index)
+                continue
+            if source.startswith("/-", index):
+                index = mask_block_comment(index)
+                continue
+            if source.startswith('s!"', index):
+                # Preserve the interpolation introducer as code, mask literal
+                # text, and recursively preserve each {...} expression.
+                out[index] = "s"
+                out[index + 1] = "!"
+                index = scan_interpolated_string(index + 3)
+                continue
+            if source[index] == '"':
+                index = mask_plain_string(index)
+                continue
+            if source[index] == "«":
+                index = mask_quoted_identifier(index)
+                continue
+            if stop_at_closing_brace and source[index] == "}":
+                out[index] = "}"
+                return index + 1
+            if stop_at_closing_brace and source[index] == "{":
+                out[index] = "{"
+                index = scan_code(index + 1, stop_at_closing_brace=True)
+                continue
+
+            out[index] = source[index]
+            index += 1
+        return index
+
+    scan_code(0)
+    return "".join(out)
+
+
+def is_identifier_start(char: str) -> bool:
+    if char == "_":
+        return True
+    category = unicodedata.category(char)
+    return category.startswith("L") or category == "Nl"
+
+
+def is_identifier_continue(char: str) -> bool:
+    if char in {"_", "'"}:
+        return True
+    category = unicodedata.category(char)
+    return category[0] in {"L", "M", "N"}
+
+
+def identifiers(code: str):
+    index = 0
+    n = len(code)
+    while index < n:
+        if not is_identifier_start(code[index]):
+            index += 1
             continue
+        start = index
+        index += 1
+        while index < n and is_identifier_continue(code[index]):
+            index += 1
+        yield start, index, code[start:index]
 
-        if source.startswith("--", i):
-            mask(i)
-            if i + 1 < n:
-                mask(i + 1)
-            in_line_comment = True
-            i += 2
+
+def violations_in(source: str) -> list[tuple[int, str, str]]:
+    code = mask_noncode(source)
+    violations: list[tuple[int, str, str]] = []
+    for start, _end, token in identifiers(code):
+        description = FORBIDDEN.get(token)
+        if description is None:
             continue
-
-        if source.startswith("/-", i):
-            mask(i)
-            if i + 1 < n:
-                mask(i + 1)
-            block_depth = 1
-            i += 2
-            continue
-
-        if source[i] == '"':
-            mask(i)
-            in_string = True
-            i += 1
-            continue
-
-        i += 1
-
-    return "".join(chars)
+        line = source.count("\n", 0, start) + 1
+        violations.append((line, description, token))
+    return violations
 
 
-def find_rule(source: str, pattern: Pattern[str]) -> re.Match[str] | None:
-    return pattern.search(mask_noncode(source))
+# Regression checks for every review-discovered bypass, plus false-positive
+# guards for legitimate Lean identifiers and non-code text.
+assert violations_in("axiom\nbogus : False\n")
+assert violations_in("@[simp] axiom\nbogus : False\n")
+assert violations_in('def hidden : String := s!"{(sorry : Nat)}"\n')
+assert violations_in("theorem trustBypass : False := sorryAx False true\n")
+assert violations_in("theorem trustBypass : False := Lean.sorryAx False true\n")
+assert violations_in("theorem trustBypass : True := Lean.ofReduceBool True rfl\n")
+assert not violations_in("def native_decide' : Nat := 0\n")
+assert not violations_in("def sorry' : Nat := 0\n")
+assert not violations_in("-- sorry axiom native_decide sorryAx\ndef ok := 0\n")
+assert not violations_in('/- nested /- sorry -/ axiom -/\ndef ok := 0\n')
+assert not violations_in('def note := "sorry axiom native_decide sorryAx"\n')
+assert not violations_in('def note := s!"literal sorry, but {1 + 1} is code"\n')
+assert not violations_in("def «sorry» : Nat := 0\n")
 
+# Verify that a .lean symlink is discovered and that its target contents are
+# actually scanned even when the target has a non-.lean extension.
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    payload = root / "review_payload.txt"
+    payload.write_text("theorem hidden : True := by sorry\n", encoding="utf-8")
+    link = root / "ReviewSymlink.lean"
+    link.symlink_to(payload.name)
+    discovered = discover_lean_files(root)
+    assert link in discovered
+    assert violations_in(link.read_text(encoding="utf-8"))
 
-# Regression checks for the exact bypass reported by review, plus the masking
-# behavior that keeps ordinary comments/strings usable in trusted Lean files.
-_axiom_pattern = RULES[1][1]
-assert find_rule("axiom\nbogus : False\n", _axiom_pattern) is not None
-assert find_rule("@[simp] axiom\nbogus : False\n", _axiom_pattern) is not None
-assert find_rule("-- axiom\nbogus : False\n", _axiom_pattern) is None
-assert find_rule('/- axiom\nbogus : False -/\n', _axiom_pattern) is None
-assert find_rule('def note := "axiom\\nbogus"\n', _axiom_pattern) is None
+lean_files = discover_lean_files(Path("."))
+if not lean_files:
+    print("ERROR: no project Lean files found.", file=sys.stderr)
+    raise SystemExit(1)
 
 violations: list[tuple[str, int, str, str]] = []
+for path in lean_files:
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        print(f"{path}: ERROR: unable to read Lean source: {error}", file=sys.stderr)
+        raise SystemExit(1) from error
 
-for file_name in sys.argv[1:]:
-    path = Path(file_name)
-    source = path.read_text(encoding="utf-8")
-    code = mask_noncode(source)
-
-    for description, pattern in RULES:
-        for match in pattern.finditer(code):
-            line = source.count("\n", 0, match.start()) + 1
-            token = source[match.start() : match.end()].replace("\n", "\\n")
-            violations.append((str(path), line, description, token))
+    for line, description, token in violations_in(source):
+        violations.append((str(path), line, description, token))
 
 if violations:
     for path, line, description, token in violations:
         print(f"{path}:{line}: ERROR: {description}: {token!r}", file=sys.stderr)
     raise SystemExit(1)
 
-print("Lean trust gate passed: no admitted proofs, custom axioms, or native_decide.")
+print(
+    "Lean trust gate passed: no admitted proofs, custom axioms, "
+    "native-evaluator trust, or reviewed scanner bypasses."
+)
 PY
