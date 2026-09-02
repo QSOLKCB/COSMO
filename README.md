@@ -22,10 +22,12 @@ PR A establishes the first reproducible integrity baseline:
 
 - Lean 4 is pinned to **v4.33.1**.
 - Mathlib is pinned to commit `0df444a360eaa60ab8c11dca51a86af692955474` (tag `v4.33.1`).
-- project-authored `sorry` and custom Lean `axiom` declarations are rejected by CI;
-- exported theorem axiom dependencies are printed in CI and checked for `sorryAx`;
+- project-authored `sorry`, `admit`, custom Lean `axiom` declarations, and `native_decide` are rejected by CI;
+- exported theorem axiom dependencies are printed in CI and checked against the explicit allow-list `propext`, `Classical.choice`, and `Quot.sound`;
+- arithmetic decision proofs use kernel reduction (`decide`) rather than native-evaluator proof shortcuts;
 - the Lucas-number computation proves `L_101 = 1281597540372340914251`;
 - `L_101 mod 256 = 75` and the project quantization gives `floor(phi^101) mod 256 = 75`;
+- `phiFloorMod` requires a proof that its modulus is positive, matching the Python API's rejection of zero modulus;
 - the represented Dragon Seed payload is **8 bytes / 64 bits**;
 - the arithmetic byte sum is **1512**;
 - `1621` is retained only as a **declared symbolic invariant**, not a checksum;
