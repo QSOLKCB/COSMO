@@ -22,8 +22,9 @@ PR A establishes the first reproducible integrity baseline:
 
 - Lean 4 is pinned to **v4.33.1**.
 - Mathlib is pinned to commit `0df444a360eaa60ab8c11dca51a86af692955474` (tag `v4.33.1`).
-- project-authored `sorry`, `admit`, direct `sorryAx`, custom Lean `axiom` / `constant` declarations, `native_decide`, and direct `Lean.ofReduceBool` trust are rejected by CI;
-- the trust scanner handles executable interpolation expressions, quoted trusted-base names, Lean identifier suffixes, raw string literals, and symlinked `.lean` modules;
+- project Lean warnings are treated as errors, so parsed `sorry` / `admit` admissions cannot survive as non-fatal build warnings even inside context-sensitive interpolation syntax;
+- project-authored `sorry`, `admit`, direct `sorryAx`, custom Lean `axiom` / `constant` declarations, all project `opaque` declarations, `native_decide`, and direct `Lean.ofReduceBool` trust are rejected by the trusted-core policy;
+- the trust scanner handles identifier-bang executable interpolation expressions (including `s!`, `m!`, `f!`, `v!` and project-defined macros with the same lexical shape), quoted trusted-base names, Lean identifier suffixes, raw string literals, and symlinked `.lean` modules;
 - exported theorem axiom dependencies are printed in CI and checked against the explicit allow-list `propext`, `Classical.choice`, and `Quot.sound`;
 - arithmetic decision proofs use kernel reduction (`decide`) rather than native-evaluator proof shortcuts;
 - the Lucas-number computation proves `L_101 = 1281597540372340914251`;
@@ -34,6 +35,8 @@ PR A establishes the first reproducible integrity baseline:
 - `1621` is retained only as a **declared symbolic invariant**, not a checksum;
 - the exact DIAG `(1, -2, 1)` constant and affine identities are proved over integers;
 - the Float DIAG function remains executable but is not presented as a universal algebraic theorem.
+
+The ban on project `opaque` declarations is intentionally conservative for this baseline. It closes the bodyless-opaque axiom-like declaration path without asking the lightweight source lexer to distinguish bodyless from bodyful opaque syntax. A future need for legitimate opacity should be introduced with an explicit trust-policy change and semantic audit coverage.
 
 ## Repository map
 
@@ -61,7 +64,7 @@ lake build
 lake env lean audit/AxiomAudit.lean
 ```
 
-The pinned `lean-toolchain` and exact Mathlib revision define the formal build environment.
+The pinned `lean-toolchain` and exact Mathlib revision define the formal build environment. The Lake package enables `warningAsError`, so a project warning is a build failure rather than advisory output.
 
 ## Run the Python checks
 
