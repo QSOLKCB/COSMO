@@ -1,4 +1,5 @@
 import Lean.Compiler.ModPkgExt
+import Lean.Elab.Command
 import Lean.Util.CollectAxioms
 
 open Lean Meta Elab Command
