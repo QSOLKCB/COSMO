@@ -46,6 +46,32 @@ jobs:
             | sh -s -- -y --default-toolchain leanprover/lean4:v4.33.1
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
+      # Port the bounded-parallelism policy used by QSOL-GEO-REASON. Hosted
+      # runners vary in CPU count, so cap at four rather than oversubscribing.
+      - name: Configure bounded Lean parallelism
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpus="$(nproc)"
+          workers="$cpus"
+          if [ "$workers" -gt 4 ]; then workers=4; fi
+          if [ "$workers" -lt 1 ]; then workers=1; fi
+          echo "LEAN_NUM_THREADS=${workers}" >> "$GITHUB_ENV"
+          echo "Lean will use ${workers} thread(s) on ${cpus} runner CPU(s)."
+
+      # The dependency declaration pins Mathlib by exact commit, so this cache
+      # identity changes whenever the Lean toolchain or dependency declaration
+      # changes. On a warm hit Lake can reuse both dependency sources and the
+      # Mathlib build artifacts instead of recloning and redownloading thousands
+      # of cached proof objects on every PR head.
+      - name: Restore Lean dependency/build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            .lake/packages
+            lake-manifest.json
+          key: cosmo-lean-deps-v1-${{ runner.os }}-lean-4.33.1-${{ hashFiles('lean-toolchain', 'lakefile.lean') }}
+
       - name: Build pinned Lake project
         run: lake build
 
