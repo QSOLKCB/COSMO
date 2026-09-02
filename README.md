@@ -22,7 +22,8 @@ PR A establishes the first reproducible integrity baseline:
 
 - Lean 4 is pinned to **v4.33.1**.
 - Mathlib is pinned to commit `0df444a360eaa60ab8c11dca51a86af692955474` (tag `v4.33.1`).
-- project-authored `sorry`, `admit`, custom Lean `axiom` declarations, and `native_decide` are rejected by CI;
+- project-authored `sorry`, `admit`, direct `sorryAx`, custom Lean `axiom` / `constant` declarations, `native_decide`, and direct `Lean.ofReduceBool` trust are rejected by CI;
+- the trust scanner handles executable interpolation expressions, quoted trusted-base names, Lean identifier suffixes, raw string literals, and symlinked `.lean` modules;
 - exported theorem axiom dependencies are printed in CI and checked against the explicit allow-list `propext`, `Classical.choice`, and `Quot.sound`;
 - arithmetic decision proofs use kernel reduction (`decide`) rather than native-evaluator proof shortcuts;
 - the Lucas-number computation proves `L_101 = 1281597540372340914251`;
