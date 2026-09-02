@@ -1,0 +1,64 @@
+name: COSMO CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lean:
+    name: Lean 4 formal integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pinned Lean toolchain
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain leanprover/lean4:v4.33.1
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Build pinned Lake project
+        run: lake build
+
+      - name: Reject sorry and custom axioms
+        run: ./scripts/check-lean-trust.sh
+
+      - name: Print theorem axiom dependencies
+        run: |
+          lake env lean audit/AxiomAudit.lean | tee axiom-report.txt
+          if grep -q 'sorryAx' axiom-report.txt; then
+            echo 'ERROR: sorryAx detected in exported theorem dependencies.' >&2
+            exit 1
+          fi
+
+  python:
+    name: Python deterministic core
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install development checks
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Static type check
+        run: mypy --strict cosmovirus.py tests/test_cosmovirus.py
+
+      - name: Bytecode compile check
+        run: python -m compileall -q cosmovirus.py tests

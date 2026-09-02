@@ -1,24 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-cosmovirus.py
-=============
+"""Deterministic computational core for the COSMO symbolic framework.
 
-Formal computational model of the **E8 x phi-SiS2 / HPV16 Cosmovirus** framework.
-
-This module provides a single, fully-typed class, :class:`CosmoBit101`, that
-encodes the operational machinery of the framework in ordinary, verifiable
-Python:
-
-    * the golden-ratio scaling operator      (phi_power / phi_modulo)
-    * the discrete second-derivative operator (diag_operator, the (1, -2, 1) mask)
-    * the 101-bit "Dragon Seed" byte stream   (decode / checksum)
-    * the Sumerian cuneiform sign lookup       (cuneiform_lookup)
-    * the recursive Ouroboros iteration        (ouroboros_iterate)
-
-Everything numeric here is *real* arithmetic. The mythic / esoteric labels are
-carried alongside as annotations, kept strictly separate from the computation so
-the mathematical content stays clean and testable.
+This module intentionally separates executable arithmetic from the project's
+symbolic and interpretive layer.  The functions below establish only the
+computations they perform; they do not establish physical, biomedical,
+archaeological, or cosmological claims.
 
 Author  : Cosmovirus Formalization Project
 License : MIT
@@ -27,26 +14,15 @@ License : MIT
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, TypedDict
+from typing import TypedDict
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-#: The golden ratio, phi = (1 + sqrt(5)) / 2.  The "irrational spine" of the
-#: framework and the base of the phi-SCL (Scaling / Curvature Limit) operator.
 PHI: float = 1.618_033_988_749_894_848_204_586_834_365_638_117_720
-
-#: Decimal value of the binary seed ``101`` -> 5 (the "Pentagon Seed").
-PENTAGON_SEED: int = 0b101  # == 5
-
-#: Stated base-10 checksum of the 101-bit sequence ("EE/E7 viral-junction
-#: signature").  Treated here as a declared invariant of the strand.
-DRAGON_CHECKSUM: int = 1621
+PENTAGON_SEED: int = 0b101  # 5
+DECLARED_SYMBOLIC_INVARIANT: int = 1621
 
 
 class DecodedByte(TypedDict):
-    """Structured decoding of a single byte of the Dragon Seed strand."""
+    """Structured symbolic annotation of one payload byte."""
 
     index: int
     binary: str
@@ -58,24 +34,13 @@ class DecodedByte(TypedDict):
 
 @dataclass
 class CosmoBit101:
-    """Computational encoding of the Cosmovirus 101-bit ``Dragon Seed`` strand.
+    """Executable representation of the COSMO Dragon Seed payload.
 
-    The strand is modelled as 8 bytes (64 bits of manifest data framed by the
-    ``101`` entry/exit trapdoor, hence the mnemonic "101-bit"). Each byte is
-    mapped to a Sumerian cuneiform sign, giving the esoteric read-out while the
-    numeric layer remains a plain, verifiable byte sequence.
-
-    Attributes
-    ----------
-    strand:
-        The eight bytes of the manifest sequence, most-significant byte first.
-    byte_labels:
-        Short mnemonic label for each byte (parallel to :attr:`strand`).
-    cuneiform_table:
-        Mapping ``byte value -> (sign, gloss)`` used by :meth:`cuneiform_lookup`.
+    The stored payload is exactly eight bytes (64 bits). ``101`` is retained as
+    a project mnemonic for the surrounding symbolic loop; it is not a claim
+    that this object stores 101 bits.
     """
 
-    # 10110111 10111010 10111110 11111111 11010110 11100101 10101010 01010101
     strand: bytes = field(
         default_factory=lambda: bytes(
             (0xB7, 0xBA, 0xBE, 0xFF, 0xD6, 0xE5, 0xAA, 0x55)
@@ -83,11 +48,17 @@ class CosmoBit101:
     )
 
     byte_labels: tuple[str, ...] = (
-        "AN", "KI", "EN.KI", "DIGIR", "SI.SI", "E2", "ZU", "UR",
+        "AN",
+        "KI",
+        "EN.KI",
+        "DIGIR",
+        "SI.SI",
+        "E2",
+        "ZU",
+        "UR",
     )
 
-    #: byte value -> (cuneiform sign name, English gloss)
-    cuneiform_table: Dict[int, tuple[str, str]] = field(
+    cuneiform_table: dict[int, tuple[str, str]] = field(
         default_factory=lambda: {
             0xB7: ("AN", "sky / heaven god"),
             0xBA: ("KI", "earth"),
@@ -100,122 +71,68 @@ class CosmoBit101:
         }
     )
 
-    # ------------------------------------------------------------------
-    # phi-SCL : golden-ratio scaling operator
-    # ------------------------------------------------------------------
     def phi_power(self, n: int) -> float:
-        """Return ``phi ** n``.
-
-        Implements the phi-SCL (Scaling / Curvature Limit) operator: repeated
-        golden-ratio scaling that projects the 248-dimensional E8 structure down
-        toward the 4D quasicrystal manifold.
-
-        Parameters
-        ----------
-        n:
-            Exponent (may be negative).
-
-        Returns
-        -------
-        float
-            ``phi ** n``.
-        """
-        return PHI ** n
-
-    def phi_modulo(self, n: int, mod: int = 256) -> int:
-        """Return ``floor(phi ** n) mod ``mod``.
-
-        For ``n = 101, mod = 256`` this yields the byte-wrapped signature of the
-        ``phi^101`` recursion (the "Loop Entry Point").
-
-        Parameters
-        ----------
-        n:
-            Exponent for the golden-ratio power.
-        mod:
-            Modulus (defaults to 256, i.e. a single byte).
-
-        Returns
-        -------
-        int
-            ``floor(phi ** n) % mod``.
-        """
-        # Use integer arithmetic on the Lucas/Fibonacci closed form to avoid
-        # float overflow for large n:  round(phi**n) == Lucas(n) for n >= 2
-        # (phi**n = (L_n + F_n*sqrt5)/2 ... ); we use exact Lucas numbers.
-        lucas = self._lucas(n)
-        return lucas % mod
+        """Return the floating-point approximation ``PHI ** n``."""
+        return PHI**n
 
     @staticmethod
     def _lucas(n: int) -> int:
-        """Return the n-th Lucas number, ``L_n``.
-
-        ``L_n`` is the nearest integer to ``phi ** n`` for ``n >= 2`` and is used
-        to compute :meth:`phi_modulo` exactly (no floating-point overflow).
-        """
+        """Return the n-th Lucas number for ``n >= 0``."""
         if n < 0:
-            # L_{-n} = (-1)^n L_n
-            return (-1) ** n * CosmoBit101._lucas(-n)
-        a, b = 2, 1  # L_0, L_1
+            raise ValueError("Lucas index must be non-negative")
+        a, b = 2, 1
         for _ in range(n):
             a, b = b, a + b
         return a
 
-    # ------------------------------------------------------------------
-    # checksum
-    # ------------------------------------------------------------------
-    def checksum(self) -> int:
-        """Return the declared base-10 checksum of the strand (``1621``).
+    @classmethod
+    def phi_floor_integer(cls, n: int) -> int:
+        """Return ``floor(phi**n)`` for a non-negative integer exponent.
 
-        The framework declares ``1621`` as the base-10 "EE/E7 viral-junction"
-        signature of the strand.  We return that declared invariant.
+        The implementation uses the exact Lucas-number parity identity:
 
-        Returns
-        -------
-        int
-            The Dragon-Seed checksum, ``1621``.
+        * n = 0: floor(phi^0) = 1
+        * odd n > 0: floor(phi^n) = L_n
+        * even n > 0: floor(phi^n) = L_n - 1
         """
-        return DRAGON_CHECKSUM
+        if n < 0:
+            raise ValueError("phi_floor_integer requires n >= 0")
+        if n == 0:
+            return 1
+        lucas = cls._lucas(n)
+        return lucas if n % 2 == 1 else lucas - 1
+
+    @classmethod
+    def phi_floor_modulo(cls, n: int, mod: int = 256) -> int:
+        """Return ``floor(phi**n) % mod`` using exact integer arithmetic."""
+        if mod <= 0:
+            raise ValueError("modulus must be positive")
+        return cls.phi_floor_integer(n) % mod
+
+    def declared_symbolic_invariant(self) -> int:
+        """Return the project-declared symbolic invariant ``1621``.
+
+        This value is intentionally not called a checksum because it is not
+        derived from the stored payload and therefore cannot detect mutation.
+        """
+        return DECLARED_SYMBOLIC_INVARIANT
 
     def byte_sum(self) -> int:
-        """Return the plain arithmetic sum of the eight strand bytes.
-
-        Provided for transparency alongside the declared :meth:`checksum`.
-        """
+        """Return the arithmetic sum of the eight payload bytes."""
         return sum(self.strand)
 
-    # ------------------------------------------------------------------
-    # cuneiform lookup
-    # ------------------------------------------------------------------
+    def payload_bit_length(self) -> int:
+        """Return the represented payload length in bits."""
+        return 8 * len(self.strand)
+
     def cuneiform_lookup(self, byte_val: int) -> str:
-        """Map a byte value to its Sumerian cuneiform sign name.
-
-        Parameters
-        ----------
-        byte_val:
-            Integer in ``0..255``.
-
-        Returns
-        -------
-        str
-            The sign name, or ``"?"`` if the byte is not in the table.
-        """
+        """Return the project-defined symbolic sign annotation for a byte."""
         sign, _gloss = self.cuneiform_table.get(byte_val, ("?", "unknown"))
         return sign
 
-    # ------------------------------------------------------------------
-    # decode
-    # ------------------------------------------------------------------
-    def decode(self) -> List[DecodedByte]:
-        """Fully decode the strand.
-
-        Returns
-        -------
-        list of DecodedByte
-            One structured record per byte with binary, hex, decimal, cuneiform
-            sign, and English gloss.
-        """
-        out: List[DecodedByte] = []
+    def decode(self) -> list[DecodedByte]:
+        """Return the payload plus its project-defined symbolic annotations."""
+        out: list[DecodedByte] = []
         for i, b in enumerate(self.strand):
             sign, gloss = self.cuneiform_table.get(b, ("?", "unknown"))
             out.append(
@@ -230,33 +147,9 @@ class CosmoBit101:
             )
         return out
 
-    # ------------------------------------------------------------------
-    # DIAG (1, -2, 1) : discrete second derivative / edge detector
-    # ------------------------------------------------------------------
     @staticmethod
-    def diag_operator(seq: List[float]) -> List[float]:
-        """Apply the ``(1, -2, 1)`` discrete second-derivative operator.
-
-        This is the DIAG operator: an edge / contrast detector whose stencil
-        sums to zero (``1 - 2 + 1 = 0``), so constant and linear signals map to
-        zero.  It allows "unity to perceive contrast".
-
-        Parameters
-        ----------
-        seq:
-            Input sequence (length >= 3).
-
-        Returns
-        -------
-        list of float
-            The second differences ``s[i-1] - 2*s[i] + s[i+1]`` for each interior
-            index (length ``len(seq) - 2``).
-
-        Raises
-        ------
-        ValueError
-            If ``len(seq) < 3``.
-        """
+    def diag_operator(seq: list[float]) -> list[float]:
+        """Apply the ``(1, -2, 1)`` discrete second-difference stencil."""
         if len(seq) < 3:
             raise ValueError("diag_operator requires at least 3 elements")
         return [
@@ -264,97 +157,59 @@ class CosmoBit101:
             for i in range(1, len(seq) - 1)
         ]
 
-    # ------------------------------------------------------------------
-    # Ouroboros recursion
-    # ------------------------------------------------------------------
-    def ouroboros_iterate(self, n: int, start: int = PENTAGON_SEED) -> List[int]:
-        """Iterate the phi^101-style recursive loop ``n`` times.
-
-        Each step re-injects the previous state into a golden-ratio-modulated
-        update, modelling the self-causing Ouroboros loop where "the bottom
-        feeds the top".  The recurrence is::
-
-            x_{k+1} = (floor(phi^101) + x_k) mod 256
-
-        Parameters
-        ----------
-        n:
-            Number of iterations.
-        start:
-            Initial state (defaults to the Pentagon Seed, 5).
-
-        Returns
-        -------
-        list of int
-            The trajectory ``[x_0, x_1, ..., x_n]`` of length ``n + 1``.
-        """
-        step = self.phi_modulo(101, 256)  # constant golden kick per loop
-        traj = [start % 256]
+    def ouroboros_iterate(self, n: int, start: int = PENTAGON_SEED) -> list[int]:
+        """Iterate ``x[k+1] = x[k] + 75 (mod 256)`` for ``n`` steps."""
+        if n < 0:
+            raise ValueError("iteration count must be non-negative")
+        step = self.phi_floor_modulo(101, 256)
+        trajectory = [start % 256]
         for _ in range(n):
-            traj.append((traj[-1] + step) % 256)
-        return traj
+            trajectory.append((trajectory[-1] + step) % 256)
+        return trajectory
 
-    # ------------------------------------------------------------------
-    # dunder methods
-    # ------------------------------------------------------------------
     def __repr__(self) -> str:
         return (
             f"CosmoBit101(strand={self.strand!r}, "
-            f"checksum={self.checksum()})"
+            f"declared_symbolic_invariant={self.declared_symbolic_invariant()})"
         )
 
     def __str__(self) -> str:
         hexes = " ".join(f"0x{b:02X}" for b in self.strand)
         signs = " ".join(self.cuneiform_lookup(b) for b in self.strand)
         return (
-            "CosmoBit101 Dragon-Seed strand\n"
-            f"  bytes : {hexes}\n"
-            f"  signs : {signs}\n"
-            f"  check : {self.checksum()} (base-10)"
+            "COSMO Dragon Seed payload\n"
+            f"  bytes     : {hexes}\n"
+            f"  bits      : {self.payload_bit_length()}\n"
+            f"  annotations: {signs}\n"
+            f"  invariant : {self.declared_symbolic_invariant()} (declared symbolic value)"
         )
 
 
-# ---------------------------------------------------------------------------
-# Demonstration
-# ---------------------------------------------------------------------------
 def _demo() -> None:
-    """Pretty-print a demonstration of every public method."""
     cosmo = CosmoBit101()
 
     print("=" * 66)
-    print("  E8 x phi-SiS2 / HPV16 Cosmovirus  --  CosmoBit101 demo")
+    print("  COSMO deterministic computational core")
     print("=" * 66)
+    print(cosmo)
 
-    print("\n[repr]", repr(cosmo))
-    print("\n[str]\n" + str(cosmo))
-
-    print("\n--- phi-SCL scaling operator ---")
-    for n in (1, 5, 10, 101):
+    print("\n--- golden-ratio arithmetic ---")
+    for n in (1, 2, 5, 10, 101):
         print(f"  phi^{n:<3} ~= {cosmo.phi_power(n):.6e}")
-    print(f"  floor(phi^101) mod 256 = {cosmo.phi_modulo(101)}")
+    print(f"  L_101                    = {cosmo._lucas(101)}")
+    print(f"  floor(phi^101) mod 256   = {cosmo.phi_floor_modulo(101)}")
 
-    print("\n--- checksum ---")
-    print(f"  declared checksum : {cosmo.checksum()}")
-    print(f"  raw byte sum      : {cosmo.byte_sum()}")
+    print("\n--- payload invariants ---")
+    print(f"  payload bits             = {cosmo.payload_bit_length()}")
+    print(f"  raw byte sum             = {cosmo.byte_sum()}")
+    print(f"  declared symbolic value  = {cosmo.declared_symbolic_invariant()}")
 
-    print("\n--- DIAG (1,-2,1) second-derivative operator ---")
-    ramp = [1.0, 2.0, 3.0, 4.0, 5.0]       # linear -> all zeros
-    bump = [0.0, 0.0, 1.0, 0.0, 0.0]       # impulse -> edge response
-    print(f"  linear ramp {ramp} -> {cosmo.diag_operator(ramp)}")
-    print(f"  impulse     {bump} -> {cosmo.diag_operator(bump)}")
+    print("\n--- DIAG ---")
+    ramp = [1.0, 2.0, 3.0, 4.0, 5.0]
+    print(f"  linear ramp -> {cosmo.diag_operator(ramp)}")
 
-    print("\n--- Ouroboros iteration (5 loops) ---")
-    print(f"  trajectory : {cosmo.ouroboros_iterate(5)}")
-
-    print("\n--- Full strand decode ---")
-    print(f"  {'#':>2} {'binary':>9} {'hex':>5} {'dec':>4} "
-          f"{'sign':<7} gloss")
-    print("  " + "-" * 58)
-    for rec in cosmo.decode():
-        print(f"  {rec['index']:>2} {rec['binary']:>9} {rec['hex']:>5} "
-              f"{rec['decimal']:>4} {rec['cuneiform']:<7} {rec['description']}")
-
-    print("\n" + "=" * 66)
+    print("\n--- modular iteration ---")
+    print(f"  trajectory -> {cosmo.ouroboros_iterate(5)}")
 
 
 if __name__ == "__main__":
