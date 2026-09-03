@@ -204,8 +204,12 @@ def analyze(workspace: Path, manifest: Path, toolchain_lib: Path) -> Analysis:
     if not project_artifacts:
         raise AuditLayoutError("no project-controlled Lean .olean artifacts found")
 
-    trusted_entries = tuple(external_outputs + [toolchain_lib])
-    lean_entries = tuple(external_outputs + [toolchain_lib, project_output])
+    # Trusted modules always precede project outputs. A project artifact using
+    # the same module name as the toolchain or a pinned dependency therefore
+    # resolves to the trusted artifact; CosmoTrust then rejects the project
+    # artifact because its exact path does not round-trip through `findOLean`.
+    trusted_entries = tuple([toolchain_lib] + external_outputs)
+    lean_entries = tuple([toolchain_lib] + external_outputs + [project_output])
     for path in lean_entries:
         rendered = str(path)
         if os.pathsep in rendered or "\n" in rendered or "\0" in rendered:
@@ -259,6 +263,7 @@ def self_test() -> None:
         assert quoted in result.project_artifacts
         assert root_output in result.project_output_dirs
         assert external_output in result.trusted_path_entries
+        assert result.trusted_path_entries[0] == toolchain_lib
         assert result.lean_path_entries[-1] == root_output
 
         hidden = root_output / "Hidden.olean"
