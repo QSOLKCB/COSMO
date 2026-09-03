@@ -143,7 +143,11 @@ PY
 end_group
 
 begin_group "Authenticate dependency artifacts before project compilation"
-python3 scripts/verify-lean-dependency-artifacts.py \
+# Fresh/update hooks may leave some dependency artifacts readable only by their
+# owner. Verify the reviewed canonical receipt as that owner before privilege
+# is removed. The verifier itself is loaded from the immutable reviewed checkout.
+sudo -u cosmobuild \
+  python3 "$GITHUB_WORKSPACE/scripts/verify-lean-dependency-artifacts.py" \
   --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
   --expected-canonical-sha256 "$EXPECTED_DEP_CANONICAL_SHA256" \
   --expected-artifact-count "$EXPECTED_DEP_ARTIFACT_COUNT"
