@@ -22,13 +22,13 @@ env:
   TZ: UTC
   PYTHONHASHSEED: "0"
   COSMO_BUILD_WORKSPACE: /tmp/cosmo-build-workspace
-  COSMO_AUDIT_WORKSPACE: /tmp/cosmo-build-workspace/.cosmo-audit
+  COSMO_AUDIT_WORKSPACE: /tmp/cosmo-audit-workspace
 
 jobs:
   lean:
     name: Lean 4 formal integrity
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout reviewed source
         uses: actions/checkout@v4
@@ -69,20 +69,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "$COSMO_BUILD_WORKSPACE"
+          rm -rf "$COSMO_BUILD_WORKSPACE" "$COSMO_AUDIT_WORKSPACE"
           mkdir -p "$COSMO_BUILD_WORKSPACE"
           git archive --format=tar HEAD | tar -xf - -C "$COSMO_BUILD_WORKSPACE"
 
       # Cache only dependency package state. `lake-manifest.json` is deliberately
       # excluded and is regenerated unconditionally before project compilation.
-      # The v3 schema prevents reuse of the older cache that bundled a mutable
-      # post-build manifest. Restored proof artifacts are independently checked
-      # against the reviewed OPT-LEAN-001 canonical receipt before use.
+      # Restored dependency proof artifacts are kernel-validated and snapshotted
+      # before the project build identity receives any writable output path.
       - name: Restore Lean dependency/build cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: /tmp/cosmo-build-workspace/.lake/packages
-          key: cosmo-lean-deps-v3-${{ runner.os }}-x86_64-lean-4.33.1-${{ hashFiles('lean-toolchain', 'lakefile.lean') }}
+          key: cosmo-lean-deps-v4-${{ runner.os }}-x86_64-lean-4.33.1-${{ hashFiles('lean-toolchain', 'lakefile.lean') }}
 
       - name: Run isolated Lean integrity pipeline
         shell: bash
