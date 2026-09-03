@@ -5,8 +5,9 @@ This is the source half of COSMO Phase B1 / OPT-LEAN-001.  Compiled
 artifacts are authenticated separately.  The verifier deliberately does not
 trust `git status`, repository-local hooks/configuration, replacement refs, or
 index shortcuts.  For each manifest Git package it checks the exact revision,
-tracked bytes and modes, and the complete worktree closure after generated
-package `.lake` state has been removed.
+rehashes the stored Git object database, verifies tracked bytes and modes, and
+checks the complete worktree closure after generated package `.lake` state has
+been removed.
 """
 
 from __future__ import annotations
@@ -237,6 +238,20 @@ def reject_object_redirection(path: Path, package: str) -> None:
         )
 
 
+def verify_object_database(path: Path, package: str) -> None:
+    """Rehash stored Git objects before trusting commit/tree traversal."""
+
+    # `sanitize_git_metadata` has already rejected alternates, grafts, replace
+    # refs, hooks, and repository-local configuration.  A strict full fsck now
+    # recomputes object identities over the stored commit/tree/blob contents,
+    # so a poisoned cache cannot place forged commit or tree bytes under a
+    # manifest-pinned object name and then feed those bytes to `ls-tree`.
+    try:
+        run_git(path, "fsck", "--full", "--strict", "--no-reflogs", "--no-progress")
+    except SystemExit as error:
+        raise SystemExit(f"Git object-integrity verification failed in {package}: {error}") from error
+
+
 def reject_index_flags(path: Path, package: str) -> None:
     raw = run_git(path, "ls-files", "-v", "-z")
     for entry in raw.split(b"\0"):
@@ -292,6 +307,7 @@ def verify_worktree_closure(
 def verify_commit_tree(path: Path, package: str, revision: str) -> str:
     assert_sanitized_git_metadata(path, package)
     reject_object_redirection(path, package)
+    verify_object_database(path, package)
     reject_index_flags(path, package)
 
     generated_lake = path / ".lake"
