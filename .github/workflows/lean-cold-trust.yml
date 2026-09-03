@@ -87,12 +87,25 @@ jobs:
           sudo install -d -o cosmoresolve -g cosmoresolve -m 0700 /tmp/cosmoresolve-home
           sudo install -d -o cosmodepbuild -g cosmodepbuild -m 0700 /tmp/cosmodepbuild-home
 
+          # The pinned Lean distribution lives under RUNNER_TEMP. Grant only
+          # directory traversal to the isolated system users; the toolchain
+          # files themselves remain runner-owned and non-writable.
+          sudo chmod o+x /home/runner /home/runner/work "$RUNNER_TEMP"
+
           if sudo -u cosmoresolve test -w "$GITHUB_WORKSPACE"; then
             echo "resolver identity can write reviewed checkout" >&2
             exit 1
           fi
           if sudo -u cosmodepbuild test -w "$GITHUB_WORKSPACE"; then
             echo "dependency-build identity can write reviewed checkout" >&2
+            exit 1
+          fi
+          if sudo -u cosmoresolve test -w "$PINNED_LEAN_HOME"; then
+            echo "resolver identity can write pinned Lean distribution" >&2
+            exit 1
+          fi
+          if sudo -u cosmodepbuild test -w "$PINNED_LEAN_HOME"; then
+            echo "dependency-build identity can write pinned Lean distribution" >&2
             exit 1
           fi
 
@@ -140,22 +153,10 @@ jobs:
         run: |
           set -euo pipefail
           sudo install -d -o cosmoresolve -g cosmoresolve -m 0700 "$COLD_MATHLIB"
-          sudo -u cosmoresolve env -i \
-            HOME=/tmp/cosmoresolve-home PATH=/usr/bin:/bin \
-            GIT_TERMINAL_PROMPT=0 \
-            git -C "$COLD_MATHLIB" init
-          sudo -u cosmoresolve env -i \
-            HOME=/tmp/cosmoresolve-home PATH=/usr/bin:/bin \
-            GIT_TERMINAL_PROMPT=0 \
-            git -C "$COLD_MATHLIB" remote add origin "$MATHLIB_URL"
-          sudo -u cosmoresolve env -i \
-            HOME=/tmp/cosmoresolve-home PATH=/usr/bin:/bin \
-            GIT_TERMINAL_PROMPT=0 \
-            git -C "$COLD_MATHLIB" fetch --depth=1 origin "$MATHLIB_COMMIT"
-          sudo -u cosmoresolve env -i \
-            HOME=/tmp/cosmoresolve-home PATH=/usr/bin:/bin \
-            GIT_TERMINAL_PROMPT=0 \
-            git -C "$COLD_MATHLIB" checkout --detach FETCH_HEAD
+          sudo -u cosmoresolve env -i HOME=/tmp/cosmoresolve-home PATH=/usr/bin:/bin GIT_TERMINAL_PROMPT=0 git -C "$COLD_MATHLIB" init
+          sudo -u cosmoresolve env -i HOME=/tmp/cosmoresolve-home PATH=/usr/bin:/bin GIT_TERMINAL_PROMPT=0 git -C "$COLD_MATHLIB" remote add origin "$MATHLIB_URL"
+          sudo -u cosmoresolve env -i HOME=/tmp/cosmoresolve-home PATH=/usr/bin:/bin GIT_TERMINAL_PROMPT=0 git -C "$COLD_MATHLIB" fetch --depth=1 origin "$MATHLIB_COMMIT"
+          sudo -u cosmoresolve env -i HOME=/tmp/cosmoresolve-home PATH=/usr/bin:/bin GIT_TERMINAL_PROMPT=0 git -C "$COLD_MATHLIB" checkout --detach FETCH_HEAD
           sudo pkill -TERM -u cosmoresolve 2>/dev/null || true
           sleep 1
           ! sudo pgrep -u cosmoresolve >/dev/null 2>&1
@@ -171,8 +172,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Keep verified Mathlib source read-only. Only its generated Lake
-          # directory and tracked manifest are temporarily writable by resolver.
           sudo chown -R root:root "$COLD_MATHLIB"
           sudo chmod -R a+rX "$COLD_MATHLIB"
           sudo chmod -R a-w "$COLD_MATHLIB"
@@ -217,8 +216,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Mathlib and transitive dependency source stays root-owned/read-only.
-          # Only generated `.lake` build/config state is opened to depbuilder.
           sudo chown -R root:root "$COLD_MATHLIB"
           sudo chmod -R a+rX "$COLD_MATHLIB"
           sudo chmod -R a-w "$COLD_MATHLIB"
