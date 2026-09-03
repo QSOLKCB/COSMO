@@ -1,5 +1,7 @@
 import Lean.Compiler.ModPkgExt
+import Lean.CoreM
 import Lean.Elab.Command
+import Lean.Environment
 import Lean.Util.CollectAxioms
 
 open Lean Meta Elab Command
@@ -15,7 +17,7 @@ private def isAllowedFoundation (name : Name) : Bool :=
 private def renderNames (names : Array Name) : String :=
   String.intercalate ", " (names.toList.map Name.toString)
 
-/-- Declaration kinds that cannot belong to the trusted project package. -/
+/-- Declaration kinds that cannot belong to a trusted project package. -/
 private def declarationKindViolation? (info : ConstantInfo) : Option String :=
   match info with
   | .axiomInfo _ => some "project-generated axiom declaration"
@@ -35,14 +37,9 @@ private def importedPackageDeclarations
           declarations
     | none => declarations
 
-/--
-Audit named declarations semantically in Lean's environment.
-
-This does not depend on their source spelling. A declaration emitted by a macro
-or command elaborator is inspected exactly like a declaration written directly.
--/
-meta def auditNamedDeclarations
-    (scope : String) (declarations : Array Name) : CommandElabM Unit := do
+/-- Audit declarations in the current kernel environment. -/
+private def auditNamedDeclarationsCore
+    (scope : String) (declarations : Array Name) : CoreM Nat := do
   let env ← getEnv
   if declarations.isEmpty then
     throwError m!"COSMO semantic trust audit selected no declarations for {scope}."
@@ -66,28 +63,89 @@ meta def auditNamedDeclarations
             s!"{declName}: unexpected axiom dependencies [{renderNames unexpected}]"
 
         let allowed := used.filter isAllowedFoundation
-        logInfo m!"TRUST-AUDIT {declName}: allowed foundations [{renderNames allowed}]"
+        IO.println
+          s!"TRUST-AUDIT {declName}: allowed foundations [{renderNames allowed}]"
 
   if failures.isEmpty then
-    logInfo m!"COSMO semantic trust audit passed for {declarations.size} declaration(s) in {scope}."
+    IO.println
+      s!"COSMO semantic trust audit passed for {declarations.size} declaration(s) in {scope}."
   else
     for failure in failures do
-      logError m!"{failure}"
-    throwError m!"COSMO semantic trust audit failed with {failures.size} finding(s) in {scope}."
+      IO.eprintln failure
+    throwError
+      m!"COSMO semantic trust audit failed with {failures.size} finding(s) in {scope}."
+
+  return declarations.size
 
 /--
-Discover the Lake package from an imported anchor module, then audit every
-imported declaration built by that package. This automatically covers generated
-declarations and future project modules in the same Lake package.
+Audit every package represented by the supplied imported modules.
+
+Using every captured project module as an anchor automatically includes sibling
+library roots and locally required path packages while de-duplicating their Lake
+package identifiers.
 -/
-meta def auditImportedPackageFrom (anchorModule : Name) : CommandElabM Unit := do
+private def auditImportedPackagesCore
+    (anchorModules : Array Name) : CoreM (Nat × Nat) := do
+  if anchorModules.isEmpty then
+    throwError "COSMO semantic trust audit received no project modules."
+
   let env ← getEnv
-  let some moduleIdx := env.getModuleIdx? anchorModule
-    | throwError m!"COSMO semantic trust audit cannot find imported module {anchorModule}."
-  let some packageId := env.getModulePackageByIdx? moduleIdx
-    | throwError m!"COSMO semantic trust audit found no Lake package for {anchorModule}."
-  auditNamedDeclarations
-    s!"Lake package {packageId} (anchored at {anchorModule})"
-    (importedPackageDeclarations env packageId)
+  let mut packageIds : Array PkgId := #[]
+  for anchorModule in anchorModules do
+    let some moduleIdx := env.getModuleIdx? anchorModule
+      | throwError m!"COSMO semantic trust audit cannot find imported module {anchorModule}."
+    let some packageId := env.getModulePackageByIdx? moduleIdx
+      | throwError m!"COSMO semantic trust audit found no Lake package for {anchorModule}."
+    unless packageIds.contains packageId do
+      packageIds := packageIds.push packageId
+
+  let mut declarationCount := 0
+  for packageId in packageIds do
+    let declarations := importedPackageDeclarations env packageId
+    declarationCount := declarationCount +
+      (← auditNamedDeclarationsCore s!"Lake package {packageId}" declarations)
+
+  return (packageIds.size, declarationCount)
+
+/--
+Audit named declarations semantically in Lean's elaborated environment.
+
+This command remains available for focused negative regression fixtures.
+-/
+meta def auditNamedDeclarations
+    (scope : String) (declarations : Array Name) : CommandElabM Unit := do
+  discard <| liftCoreM <| auditNamedDeclarationsCore scope declarations
+
+/-- Audit all Lake packages represented by the supplied imported modules. -/
+meta def auditImportedPackagesFrom
+    (anchorModules : Array Name) : CommandElabM Unit := do
+  discard <| liftCoreM <| auditImportedPackagesCore anchorModules
+
+/-- Backwards-compatible one-package audit command. -/
+meta def auditImportedPackageFrom (anchorModule : Name) : CommandElabM Unit :=
+  auditImportedPackagesFrom #[anchorModule]
+
+private def runProtectedAudit
+    (env : Environment) (modules : Array Name) : IO Unit :=
+  Core.CoreM.toIO'
+    (ctx := { fileName := "cosmo-protected-audit", fileMap := default })
+    (s := { env }) do
+      let (packageCount, declarationCount) ← auditImportedPackagesCore modules
+      IO.println
+        s!"COSMO_PROTECTED_AUDIT_COMPLETE modules={modules.size} packages={packageCount} declarations={declarationCount} project_initializers=not_executed"
+
+/--
+Load frozen project modules without executing their `initialize` actions, then
+audit every Lake package represented by those modules.
+-/
+unsafe def _root_.main : IO Unit := do
+  let args ← IO.getArgs
+  let modules := args.toArray.map String.toName
+  if modules.isEmpty then
+    throw <| IO.userError "COSMO protected audit requires at least one module name."
+  let imports := modules.map fun moduleName =>
+    { module := moduleName : Lean.Import }
+  Lean.withImportModules imports {} fun env =>
+    runProtectedAudit env modules
 
 end CosmoTrust
