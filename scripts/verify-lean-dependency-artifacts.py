@@ -1,23 +1,33 @@
 #!/usr/bin/env python3
-"""Verify cached Lean dependency build artifacts against a reviewed anchor.
+"""Create and verify a run-local receipt for Lean dependency build artifacts.
 
-The canonical digest algorithm is the OPT-LEAN-001 / QSOL-GEO-REASON receipt
-algorithm: sorted relative path, file size, and SHA-256 for every regular file
-under each dependency package's `.lake/build` tree.  The expected digest and
-artifact count are supplied by reviewed CI source, never by the cache itself.
+This receipt is an immutability witness, not an external provenance authority.
+Protected CI first validates the dependency proof environment with the pinned
+Lean kernel, then snapshots every regular file under each dependency package's
+`.lake/build` tree. After COSMO project compilation, the same file set must
+produce the identical canonical digest and artifact count.
+
+The externally anchored OPT-LEAN-001 two-cache design remains a later roadmap
+optimization. PR A deliberately avoids pretending that Mathlib's public cache
+artifact population is identical to QSOL-GEO-REASON's cold-build receipt.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import stat
+import sys
 from pathlib import Path
+from typing import Any
+
+SCHEMA = "COSMO-LEAN-DEPS-RUN-RECEIPT-1"
 
 
 class VerificationError(RuntimeError):
-    """Raised when dependency artifacts do not match the reviewed contract."""
+    """Raised when dependency artifact state is malformed or changed."""
 
 
 def sha256_file(path: Path) -> str:
@@ -29,6 +39,7 @@ def sha256_file(path: Path) -> str:
 
 
 def collect_records(root: Path) -> list[tuple[str, int, str]]:
+    root = Path(os.path.abspath(root))
     if not root.is_dir() or root.is_symlink():
         raise VerificationError(f"dependency root is missing or symlinked: {root}")
 
@@ -73,40 +84,66 @@ def canonical_digest(records: list[tuple[str, int, str]]) -> str:
     return digest.hexdigest()
 
 
-def verify(root: Path, expected_digest: str, expected_count: int) -> None:
-    root = Path(os.path.abspath(root))
+def snapshot(root: Path) -> dict[str, Any]:
     records = collect_records(root)
-    actual_count = len(records)
-    actual_digest = canonical_digest(records)
-    if actual_count != expected_count:
-        raise VerificationError(
-            f"dependency artifact count mismatch: {actual_count} != {expected_count}"
-        )
-    if actual_digest.lower() != expected_digest.lower():
-        raise VerificationError(
-            "dependency canonical SHA-256 mismatch: "
-            f"{actual_digest} != {expected_digest.lower()}"
-        )
+    return {
+        "schema": SCHEMA,
+        "artifact_count": len(records),
+        "canonical_sha256": canonical_digest(records),
+    }
+
+
+def write_receipt(root: Path, receipt: Path) -> None:
+    data = snapshot(root)
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.write_text(json.dumps(data, sort_keys=True) + "\n", encoding="utf-8")
+    receipt.chmod(0o600)
     print(
-        "Verified Lean dependency artifacts: "
-        f"files={actual_count} canonical_sha256={actual_digest}"
+        "Lean dependency run receipt created: "
+        f"files={data['artifact_count']} canonical_sha256={data['canonical_sha256']}"
+    )
+
+
+def verify_receipt(root: Path, receipt: Path) -> None:
+    if receipt.is_symlink() or not receipt.is_file():
+        raise VerificationError(f"dependency run receipt is missing or symlinked: {receipt}")
+    try:
+        expected = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise VerificationError(f"cannot read dependency run receipt: {error}") from error
+    actual = snapshot(root)
+    if expected.get("schema") != SCHEMA:
+        raise VerificationError(
+            f"dependency receipt schema mismatch: {expected.get('schema')!r} != {SCHEMA!r}"
+        )
+    for field in ("artifact_count", "canonical_sha256"):
+        if expected.get(field) != actual[field]:
+            raise VerificationError(
+                f"dependency artifact {field} changed: "
+                f"{actual[field]!r} != {expected.get(field)!r}"
+            )
+    print(
+        "Lean dependency run receipt verified: "
+        f"files={actual['artifact_count']} canonical_sha256={actual['canonical_sha256']}"
     )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--expected-canonical-sha256", required=True)
-    parser.add_argument("--expected-artifact-count", type=int, required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for command in ("snapshot", "verify"):
+        sub = subparsers.add_parser(command)
+        sub.add_argument("--root", type=Path, required=True)
+        sub.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
+
     try:
-        verify(
-            args.root,
-            args.expected_canonical_sha256,
-            args.expected_artifact_count,
-        )
+        if args.command == "snapshot":
+            write_receipt(args.root, args.receipt)
+        else:
+            verify_receipt(args.root, args.receipt)
     except VerificationError as error:
-        print(f"ERROR: {error}", file=__import__("sys").stderr)
+        print(f"ERROR: {error}", file=sys.stderr)
         return 1
     return 0
 
