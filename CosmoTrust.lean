@@ -219,32 +219,94 @@ private def runProtectedAudit
       IO.println
         s!"COSMO_PROTECTED_AUDIT_COMPLETE modules={modules.size} declarations={declarationCount} kernel_replay=verified project_initializers=not_executed"
 
+private def pathWithin (path root : System.FilePath) : Bool :=
+  let pathText := path.normalize.toString
+  let rootText := root.normalize.toString
+  pathText == rootText || pathText.startsWith (rootText ++ "/")
+
+/--
+Validate the actual dependency environment materialized before any COSMO module
+is compiled.
+
+The complete imported environment is replayed into a fresh kernel environment,
+matching `leanchecker --fresh` semantics and catching malformed unchecked
+proofs. Any axiom declaration whose defining module resolves outside the pinned
+Lean toolchain is rejected. Dependencies may use toolchain foundations, but may
+not introduce their own axioms.
+-/
+private unsafe def verifyDependencyEnvironment
+    (toolchainRootText : String) (roots : Array Name) : IO Unit := do
+  if roots.isEmpty then
+    throw <| IO.userError "dependency verification requires at least one root module"
+  let toolchainRoot ← IO.FS.realPath ⟨toolchainRootText⟩
+  let imports := roots.map fun moduleName =>
+    { module := moduleName : Lean.Import }
+  Lean.withImportModules imports {} fun env => do
+    let replayed ← (← mkEmptyEnvironment).replay env.constants.map₁
+    replayed.freeRegions
+
+    let mut unexpected : Array String := #[]
+    let mut importedAxiomCount := 0
+    for (declName, info) in env.constants.toList do
+      match info with
+      | .axiomInfo _ =>
+          match env.getModuleIdxFor? declName with
+          | none => pure ()
+          | some moduleIdx =>
+              let some moduleName := env.allImportedModuleNames[moduleIdx.toNat]?
+                | throw <| IO.userError
+                    s!"cannot resolve defining module for imported axiom {declName}"
+              let moduleFile ← findOLean moduleName
+              let moduleReal ← IO.FS.realPath moduleFile
+              unless pathWithin moduleReal toolchainRoot do
+                importedAxiomCount := importedAxiomCount + 1
+                unexpected := unexpected.push
+                  s!"{declName} from dependency module {moduleName} ({moduleReal})"
+      | _ => pure ()
+
+    unless unexpected.isEmpty do
+      for finding in unexpected do
+        IO.eprintln s!"DEPENDENCY-TRUST {finding}"
+      throw <| IO.userError
+        s!"dependency environment introduced {unexpected.size} axiom declaration(s)"
+
+    IO.println
+      s!"COSMO_DEPENDENCY_AUDIT_COMPLETE roots={roots.size} declarations={env.constants.toList.length} kernel_replay=verified dependency_axioms={importedAxiomCount}"
+
 /--
 Kernel-replay frozen project artifacts, then load and semantically audit their
 exact modules without executing imported project `initialize` actions.
 
-CLI arguments are absolute `.olean` paths, not dotted module-name strings. This
-avoids lossy `String.toName` conversion for valid names such as
+Project mode CLI arguments are absolute `.olean` paths, not dotted module-name
+strings. This avoids lossy `String.toName` conversion for valid names such as
 `Foo.«Bar.Baz»` and binds each audited name back to the exact captured artifact.
+
+Dependency mode is:
+
+`--dependency <pinned-toolchain-lib> <root-module> [<root-module> ...]`
 -/
 unsafe def _root_.main (args : List String) : IO Unit := do
-  if args.isEmpty then
-    throw <| IO.userError "COSMO protected audit requires at least one .olean artifact."
-
   initSearchPath (← findSysroot)
-  let searchPath ← searchPathRef.get
-  let mut modules : Array Name := #[]
-  for artifact in args do
-    let moduleName ← moduleNameForArtifact searchPath artifact
-    unless modules.contains moduleName do
-      modules := modules.push moduleName
+  match args with
+  | "--dependency" :: toolchainRoot :: rootTexts =>
+      let roots := rootTexts.toArray.map String.toName
+      verifyDependencyEnvironment toolchainRoot roots
+  | artifactTexts =>
+      if artifactTexts.isEmpty then
+        throw <| IO.userError "COSMO protected audit requires at least one .olean artifact."
+      let searchPath ← searchPathRef.get
+      let mut modules : Array Name := #[]
+      for artifact in artifactTexts do
+        let moduleName ← moduleNameForArtifact searchPath artifact
+        unless modules.contains moduleName do
+          modules := modules.push moduleName
 
-  for moduleName in modules do
-    replayModule moduleName
+      for moduleName in modules do
+        replayModule moduleName
 
-  let imports := modules.map fun moduleName =>
-    { module := moduleName : Lean.Import }
-  Lean.withImportModules imports {} fun env =>
-    runProtectedAudit env modules
+      let imports := modules.map fun moduleName =>
+        { module := moduleName : Lean.Import }
+      Lean.withImportModules imports {} fun env =>
+        runProtectedAudit env modules
 
 end CosmoTrust
