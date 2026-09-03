@@ -17,12 +17,22 @@ private def isAllowedFoundation (name : Name) : Bool :=
 private def renderNames (names : Array Name) : String :=
   String.intercalate ", " (names.toList.map Name.toString)
 
-/-- Declaration kinds that cannot belong to a trusted project package. -/
+/-- Declaration kinds that cannot belong to a trusted project module. -/
 private def declarationKindViolation? (info : ConstantInfo) : Option String :=
   match info with
   | .axiomInfo _ => some "project-generated axiom declaration"
   | .opaqueInfo _ => some "project opaque declaration"
   | _ => none
+
+/-- All imported declarations emitted by one module. -/
+private def importedModuleDeclarations
+    (env : Environment) (moduleIdx : ModuleIdx) : Array Name :=
+  env.constants.toList.foldl (init := (#[] : Array Name)) fun declarations entry =>
+    let declName := entry.1
+    if env.getModuleIdxFor? declName == some moduleIdx then
+      declarations.push declName
+    else
+      declarations
 
 /-- All imported declarations whose module was built by `packageId`. -/
 private def importedPackageDeclarations
@@ -77,12 +87,33 @@ private def auditNamedDeclarationsCore
 
   return declarations.size
 
+/-- Audit every declaration emitted by the supplied imported modules. -/
+private def auditImportedModulesCore (modules : Array Name) : CoreM Nat := do
+  if modules.isEmpty then
+    throwError "COSMO semantic trust audit received no project modules."
+
+  let env ← getEnv
+  let mut declarationCount := 0
+  for moduleName in modules do
+    let some moduleIdx := env.getModuleIdx? moduleName
+      | throwError m!"COSMO semantic trust audit cannot find imported module {moduleName}."
+    let declarations := importedModuleDeclarations env moduleIdx
+    if declarations.isEmpty then
+      IO.println s!"TRUST-AUDIT {moduleName}: module emits no declarations"
+    else
+      declarationCount := declarationCount +
+        (← auditNamedDeclarationsCore s!"module {moduleName}" declarations)
+
+  if declarationCount == 0 then
+    throwError "COSMO semantic trust audit found no declarations in the captured modules."
+  return declarationCount
+
 /--
 Audit every package represented by the supplied imported modules.
 
-Using every captured project module as an anchor automatically includes sibling
-library roots and locally required path packages while de-duplicating their Lake
-package identifiers.
+This command is retained for local interactive use where Lake environment
+extensions are loaded normally. Protected CI uses the module-index audit above,
+which does not require project package extensions or execute initializers.
 -/
 private def auditImportedPackagesCore
     (anchorModules : Array Name) : CoreM (Nat × Nat) := do
@@ -130,13 +161,13 @@ private def runProtectedAudit
   Core.CoreM.toIO'
     (ctx := { fileName := "cosmo-protected-audit", fileMap := default })
     (s := { env }) do
-      let (packageCount, declarationCount) ← auditImportedPackagesCore modules
+      let declarationCount ← auditImportedModulesCore modules
       IO.println
-        s!"COSMO_PROTECTED_AUDIT_COMPLETE modules={modules.size} packages={packageCount} declarations={declarationCount} project_initializers=not_executed"
+        s!"COSMO_PROTECTED_AUDIT_COMPLETE modules={modules.size} declarations={declarationCount} project_initializers=not_executed"
 
 /--
 Load frozen project modules without executing their `initialize` actions, then
-audit every Lake package represented by those modules.
+audit every declaration emitted by exactly those captured modules.
 -/
 unsafe def _root_.main : IO Unit := do
   let args ← IO.getArgs
