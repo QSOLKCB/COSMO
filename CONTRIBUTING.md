@@ -27,26 +27,31 @@ lake env lean audit/AxiomAudit.lean
 
 The trusted core rejects project-authored `sorry`, `admit`, direct `sorryAx`, custom `axiom` or `constant` declarations, all project `opaque` declarations, `native_decide`, direct `Lean.ofReduceBool` trust, and direct kernel-check bypasses such as `debug.skipKernelTC` or `addDeclWithoutChecking`. Arithmetic decision proofs should use kernel reduction (`decide`) or another proof-producing tactic.
 
-`lake build` runs the COSMO package with Lean's `warningAsError` option enabled. This is a compiler-level backstop: if Lean parses a synthetic-sorry warning from executable syntax, the build fails even when that syntax is outside the lightweight lexical scanner's model.
+The ordinary local `lake build` runs the COSMO package with Lean's `warningAsError` option enabled. Protected CI applies the same warning policy directly through the pinned `lean` executable, so an admission parsed from executable syntax remains fatal even though Lake is not allowed to manage project compilation inside the protected boundary.
 
 The source preflight treats executable identifier-bang interpolation expressions as code, recognizes Lean identifier suffixes, masks ordinary, raw, and character literals correctly, preserves dangerous quoted trusted-base names for inspection, and scans `.lean` symlinks as source modules.
 
-Local commands are not the complete protected boundary. GitHub Actions archives the reviewed commit into a disposable workspace and executes `lake build` under an unprivileged `cosmobuild` identity that cannot write the reviewed checkout. Once compilation ends, CI terminates that identity's processes, verifies every tracked file against the reviewed source, and freezes the artifact tree root-owned and read-only.
+Local commands are not the complete protected boundary. GitHub Actions archives the reviewed commit into a disposable workspace and uses Lake only to regenerate the pinned dependency configuration before any COSMO project module is compiled. The build identity is then terminated, local Lake `path` packages are rejected, and the manifest plus dependency tree are made root-owned and read-only.
 
-The protected audit then:
+The protected CI path then:
 
-1. parses the frozen `lake-manifest.json`, including tracked local `path` packages;
-2. discovers every project-controlled `.olean` output rather than assuming one package root;
-3. rejects symlinked package/output paths, symlinked `.olean` files, and project module shadowing;
-4. runs the pinned `leanchecker` directly over every captured project module;
-5. compiles the reviewed semantic runner without importing project modules, then freezes it read-only;
-6. invokes `lean` directly with a derived frozen `LEAN_PATH`, never `lake` or `lake env` under audit privileges;
-7. loads captured project modules with `Lean.withImportModules` without project initializers;
-8. rejects axiom-like or opaque declaration kinds and any transitive dependency outside `propext`, `Classical.choice`, and `Quot.sound`.
+1. records a deterministic run-local receipt over every dependency build artifact before COSMO compilation;
+2. compiles the reviewed `CosmoTrust`, `cosmovirus`, and `COSMO` modules directly with the pinned `lean` binary and warnings-as-errors, giving the project identity write access only to the isolated project output directory;
+3. requires the dependency receipt and fresh Lake manifest to remain byte-identical after project compilation;
+4. verifies every tracked project source path against the reviewed checkout;
+5. discovers the exact regular project `.olean` set, rejects symlinked or non-standard output trees, and gives the pinned toolchain priority over dependency and project paths during module resolution;
+6. derives the external dependency roots from the direct imports encoded in the compiled project headers rather than from a hand-maintained root list;
+7. replays that exact dependency closure into a fresh kernel environment and rejects dependency-introduced axiom declarations outside the pinned Lean toolchain;
+8. kernel-replays every captured project module and semantically audits every declaration it emits without executing project initializers;
+9. rejects axiom-like or opaque project declaration kinds and any transitive dependency outside `propext`, `Classical.choice`, and `Quot.sound`.
 
-CI also builds intentional generated-axiom and unchecked-malformed-theorem fixtures, then requires the semantic audit and kernel replay to reject them. Changes to macros, elaborators, package roots, local path dependencies, artifact layout, or trust tooling must preserve those negative tests.
+CI also builds intentional generated-axiom and unchecked-malformed-theorem fixtures, then requires the semantic audit and kernel replay to reject them.
 
-The current baseline intentionally forbids `opaque` declarations altogether. If a future formalization genuinely needs an opaque definition, propose a reviewed trust-policy change together with semantic audit coverage.
+PR A intentionally forbids local Lake `path` packages. Supporting them safely requires a reviewed recursive configuration-provenance policy. Do not add a path package by weakening or bypassing this gate; propose the trust-policy change explicitly.
+
+The current baseline also intentionally forbids `opaque` declarations altogether. If a future formalization genuinely needs an opaque definition, propose a reviewed trust-policy change together with semantic audit coverage.
+
+The protected module compilation list mirrors the reviewed `lean_lib` module set in `lakefile.lean`. Adding or removing a configured COSMO module therefore requires updating the protected compilation list in the same change; an unreviewed sibling root must never sit outside kernel replay and semantic auditing.
 
 If a future theorem requires assumptions, make them explicit in the theorem statement or propose a reviewed foundation-policy change rather than hiding the dependency.
 
