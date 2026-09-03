@@ -83,6 +83,20 @@ jobs:
           path: /tmp/cosmo-build-workspace/.lake/packages
           key: cosmo-lean-deps-v4-${{ runner.os }}-x86_64-lean-4.33.1-${{ hashFiles('lean-toolchain', 'lakefile.lean') }}
 
+      - name: Thaw restored dependency cache for refresh
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages="$COSMO_BUILD_WORKSPACE/.lake/packages"
+          if [ -d "$packages" ]; then
+            # Successful integrity runs deliberately save this tree read-only.
+            # Lake must be able to refresh Git metadata before the new run takes
+            # its trust snapshot. The integrity script subsequently re-owns the
+            # entire workspace as root and removes all write bits before any
+            # COSMO module is compiled.
+            sudo chmod -R u+rwX "$packages"
+          fi
+
       - name: Run isolated Lean integrity pipeline
         shell: bash
         run: bash scripts/run-lean-integrity-ci.sh
