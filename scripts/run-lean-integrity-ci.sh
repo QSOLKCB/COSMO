@@ -83,8 +83,6 @@ test -d "$TOOLCHAIN_LIB"
 end_group
 
 begin_group "Regenerate dependency configuration before project compilation"
-# Never trust a manifest restored by a performance cache. The cache contains
-# package state only; the manifest is regenerated from the reviewed lakefile.
 sudo -u cosmobuild env -i \
   HOME="$BUILD_HOME" \
   PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
@@ -100,8 +98,6 @@ if [ -L "$manifest" ] || [ ! -f "$manifest" ]; then
   exit 1
 fi
 
-# Freeze everything produced by dependency resolution before any COSMO module
-# is compiled. Project compilation later receives exactly one writable subtree.
 sudo chown -R root:root "$COSMO_BUILD_WORKSPACE"
 sudo chmod -R a+rX "$COSMO_BUILD_WORKSPACE"
 sudo chmod -R a-w "$COSMO_BUILD_WORKSPACE"
@@ -173,15 +169,15 @@ sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
 sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
   "$staging/GeneratedUncheckedTheorem.lean" "$COSMO_AUDIT_WORKSPACE/GeneratedUncheckedTheorem.lean"
 
-# Compilation sees only the pinned Lean distribution. Neither dependency nor
-# project artifacts can shadow Lean.Replay, Lean.collectAxioms, or other imports.
+# Make the enclave itself Lean's source root. The compiler still sees only the
+# pinned toolchain, so no dependency or project module can shadow auditor imports.
 sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
   LEAN_PATH="$TOOLCHAIN_LIB" LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
   LEAN_NUM_THREADS=1 \
-  "$PINNED_LEAN_HOME/bin/lean" \
-  -o "$COSMO_AUDIT_WORKSPACE/CosmoTrustAudit.olean" \
-  "$COSMO_AUDIT_WORKSPACE/CosmoTrustAudit.lean"
+  bash -c 'cd "$1"; shift; exec "$@"' \
+  _ "$COSMO_AUDIT_WORKSPACE" \
+  "$PINNED_LEAN_HOME/bin/lean" -o CosmoTrustAudit.olean CosmoTrustAudit.lean
 
 sudo chown -R root:root "$COSMO_AUDIT_WORKSPACE"
 sudo find "$COSMO_AUDIT_WORKSPACE" -type f -exec chmod 0444 {} +
@@ -216,15 +212,13 @@ sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
   LEAN_PATH="$dependency_lean_path" LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
   LEAN_NUM_THREADS=1 \
-  "$PINNED_LEAN_HOME/bin/lean" --run \
-  "$COSMO_AUDIT_WORKSPACE/CosmoTrustAudit.lean" \
+  bash -c 'cd "$1"; shift; exec "$@"' \
+  _ "$COSMO_AUDIT_WORKSPACE" \
+  "$PINNED_LEAN_HOME/bin/lean" --run CosmoTrustAudit.lean \
   --dependency "$TOOLCHAIN_LIB" Mathlib | tee "$dependency_report"
 grep -Eq '^COSMO_DEPENDENCY_AUDIT_COMPLETE roots=1 declarations=[0-9]+ kernel_replay=verified dependency_axioms=0$' \
   "$dependency_report"
 
-# Now that the actual imported dependency environment has passed fresh kernel
-# replay and introduced no dependency-owned axioms, bind its full build tree for
-# the remainder of this run. This receipt is mutation evidence, not provenance.
 python3 scripts/verify-lean-dependency-artifacts.py snapshot \
   --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
   --receipt "$DEPENDENCY_RECEIPT"
@@ -356,8 +350,9 @@ sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
   LEAN_PATH="$lean_path" LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
   LEAN_NUM_THREADS=1 \
-  "$PINNED_LEAN_HOME/bin/lean" --run \
-  "$COSMO_AUDIT_WORKSPACE/CosmoTrustAudit.lean" \
+  bash -c 'cd "$1"; shift; exec "$@"' \
+  _ "$COSMO_AUDIT_WORKSPACE" \
+  "$PINNED_LEAN_HOME/bin/lean" --run CosmoTrustAudit.lean \
   "${artifacts[@]}" | tee "$audit_report"
 grep -Eq '^COSMO_PROTECTED_AUDIT_COMPLETE modules=[0-9]+ declarations=[0-9]+ kernel_replay=verified project_initializers=not_executed$' \
   "$audit_report"
@@ -369,8 +364,9 @@ if sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
   LEAN_PATH="$COSMO_AUDIT_WORKSPACE:$TOOLCHAIN_LIB" \
   LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC LEAN_NUM_THREADS=1 \
-  "$PINNED_LEAN_HOME/bin/lean" \
-  "$COSMO_AUDIT_WORKSPACE/GeneratedAxiomFixture.lean" \
+  bash -c 'cd "$1"; shift; exec "$@"' \
+  _ "$COSMO_AUDIT_WORKSPACE" \
+  "$PINNED_LEAN_HOME/bin/lean" GeneratedAxiomFixture.lean \
   >"$generated_report" 2>&1
 then
   cat "$generated_report"
@@ -389,8 +385,9 @@ sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
   LEAN_PATH="$TOOLCHAIN_LIB" LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
   LEAN_NUM_THREADS=1 \
-  "$PINNED_LEAN_HOME/bin/lean" -o "$unchecked_output" \
-  "$COSMO_AUDIT_WORKSPACE/GeneratedUncheckedTheorem.lean"
+  bash -c 'cd "$1"; shift; exec "$@"' \
+  _ "$COSMO_AUDIT_WORKSPACE" \
+  "$PINNED_LEAN_HOME/bin/lean" -o "$unchecked_output" GeneratedUncheckedTheorem.lean
 if sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
   LEAN_PATH="$AUDIT_HOME:$TOOLCHAIN_LIB" LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
