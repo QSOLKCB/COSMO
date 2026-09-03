@@ -139,7 +139,11 @@ jobs:
           rm -rf .lake/packages
           MATHLIB_NO_CACHE_ON_UPDATE=1 "$PINNED_LEAN_HOME/bin/lake" update
           for pkg in .lake/packages/*; do
-            [ -d "$pkg" ] || continue
+            [ -e "$pkg" ] || continue
+            if [ -L "$pkg" ] || [ ! -d "$pkg" ]; then
+              echo "Invalid dependency package after fresh resolution: $pkg" >&2
+              exit 1
+            fi
             rm -rf "$pkg/.lake"
           done
           python3 "$GITHUB_WORKSPACE/scripts/verify-lean-source-state.py" \
@@ -156,10 +160,23 @@ jobs:
         run: |
           set -euo pipefail
           packages="$COSMO_BUILD_WORKSPACE/.lake/packages"
+          if [ -L "$packages" ] || [ ! -d "$packages" ]; then
+            echo "Restored dependency package root is missing or symlinked" >&2
+            exit 1
+          fi
+
+          # Reject hostile cache layout before any privileged recursive cleanup.
+          for pkg in "$packages"/*; do
+            [ -e "$pkg" ] || continue
+            if [ -L "$pkg" ] || [ ! -d "$pkg" ]; then
+              echo "Restored dependency package is symlinked or non-directory: $pkg" >&2
+              exit 1
+            fi
+          done
+
           sudo chmod -R u+rwX "$packages" "$COSMO_BUILD_WORKSPACE/.lean-cache"
           for pkg in "$packages"/*; do
-            [ -d "$pkg" ] || continue
-            sudo rm -rf "$pkg/.lake"
+            sudo rm -rf -- "$pkg/.lake"
           done
           sudo python3 "$GITHUB_WORKSPACE/scripts/verify-lean-source-state.py" \
             --root "$packages" \
@@ -191,8 +208,18 @@ jobs:
           # root-owned and read-only.
           sudo install -d -o runner -g docker -m 0755 "$COSMO_BUILD_WORKSPACE/.lake/config"
           for pkg in "$COSMO_BUILD_WORKSPACE"/.lake/packages/*; do
-            [ -d "$pkg" ] || continue
+            [ -e "$pkg" ] || continue
+            if [ -L "$pkg" ] || [ ! -d "$pkg" ]; then
+              echo "Dependency package changed type before build-cache restore: $pkg" >&2
+              exit 1
+            fi
+            sudo install -d -o runner -g docker -m 0755 "$pkg/.lake"
             sudo install -d -o runner -g docker -m 0755 "$pkg/.lake/build"
+            sudo install -d -o runner -g docker -m 0755 "$pkg/.lake/config"
+            if ! test -w "$pkg/.lake/build" || ! test -w "$pkg/.lake/config"; then
+              echo "Runner lacks required generated Lake slots for $pkg" >&2
+              exit 1
+            fi
           done
 
       - name: Restore reviewed dependency build artifacts
@@ -243,6 +270,7 @@ jobs:
             "$COSMO_BUILD_WORKSPACE/.lean-cache/source-receipt.json"
 
       - name: Run OPT-LEAN-001 protected verified-reuse pipeline
+        id: protected-pipeline
         shell: bash
         env:
           COSMO_DEPENDENCY_ANCHOR: ${{ github.workspace }}/audit/lean-dependency-anchor.json
@@ -258,8 +286,14 @@ jobs:
             echo "- Build cache hit: \`${{ steps.build-cache.outputs.cache-hit == 'true' }}\`"
             echo "- Dependency artifact count anchor: \`${{ steps.anchor.outputs.artifact_count }}\`"
             echo "- Canonical dependency SHA-256: \`${{ steps.anchor.outputs.canonical_sha256 }}\`"
-            echo "- Current COSMO modules: rebuilt from reviewed source"
-            echo "- Authority: verified reuse, not cold reconstruction"
+            echo "- Protected pipeline outcome: \`${{ steps.protected-pipeline.outcome }}\`"
+            if [ "${{ steps.protected-pipeline.outcome }}" = "success" ]; then
+              echo "- Current COSMO modules: rebuilt and audited from reviewed source"
+              echo "- Authority: verified reuse, not cold reconstruction"
+            else
+              echo "- Current COSMO modules: not certified by this run"
+              echo "- Authority: incomplete/failed; no verified-reuse claim"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   python:
