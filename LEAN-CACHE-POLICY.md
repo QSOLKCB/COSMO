@@ -1,11 +1,11 @@
 # COSMO Lean Dependency Cache and Trust Policy
 
-This document is normative for **Phase B1 / OPT-LEAN-001**.  COSMO keeps a
-routine verified-reuse lane and a separate cold-trust authority.  They answer
+This document is normative for **Phase B1 / OPT-LEAN-001**. COSMO keeps a
+routine verified-reuse lane and a separate cold-trust authority. They answer
 different questions and their evidence must not be conflated.
 
 Normative optimization source: immutable QSOL OPT v1.0.0,
-`OPT-LEAN-001 — Trust-Preserving Lean Dependency Reuse`.
+`OPT-LEAN-001 - Trust-Preserving Lean Dependency Reuse`.
 
 ## Routine lane: `COSMO CI / Lean 4 formal integrity`
 
@@ -23,7 +23,7 @@ The source-cache key binds:
 - exact `lakefile.lean` bytes;
 - frozen `lake-manifest.json` SHA-256.
 
-A source-cache hit is not trusted because the key matched.  Before use,
+A source-cache hit is not trusted because the key matched. Before use,
 `scripts/verify-lean-source-state.py`:
 
 1. requires generated dependency `.lake` state to be absent;
@@ -50,16 +50,23 @@ path NUL size NUL sha256 LF
 ```
 
 The reviewed anchor commits cryptographically to that complete per-file stream
-and to the exact artifact count.  A run-local receipt is also taken before
+and to the exact artifact count. A run-local receipt is also taken before
 COSMO compilation and recomputed afterwards as an immutability witness.
 
-The cache never authenticates itself.  A receipt restored from the same cache
+The cache never authenticates itself. A receipt restored from the same cache
 is not authoritative.
 
 ### Current reviewed routine anchor
 
-The initial B1 anchor inherits the dependency build population already accepted
-by the protected PR-A kernel replay and is bound to:
+The B1 routine anchor is bound to the first split-cache materialization produced
+from the independently verified pinned source graph. PR #2 run `33746850450`
+resolved and verified all nine Git dependency worktrees with generated package
+`.lake` state absent, then materialized Mathlib's public compiled cache before
+any COSMO module was compiled. The artifact count remained identical to the
+PR-A population, while the generated build-state bytes differed, so B1 records
+its own cache-construction identity instead of reusing the PR-A run-local digest.
+
+The reviewed B1 values are:
 
 - Lean: `4.33.1`;
 - Lean Linux archive SHA-256:
@@ -70,9 +77,14 @@ by the protected PR-A kernel replay and is bound to:
   `da84374efd9e7a24d40bbd0273c55409f1957fe121b6a795d3d5776381edc86e`;
 - dependency build artifact count: `130468`;
 - canonical dependency SHA-256:
-  `c3018c5d6758f15709c9578478973d0c131e29531a0fecdb4eb56487dd5677df`.
+  `3f690588dd7099d8cd68c681f4927e43f42c5cab3ba3c9c2f9bc9b31df8dea51`.
 
-Those values authorize **verified reuse only**.  They are not evidence that the
+A subsequent independent materialization must reproduce these values before
+the build cache is accepted and saved. If it does not, the anchor is not
+updated repeatedly to chase generated-state nondeterminism; the authoritative
+artifact surface must instead be narrowed to a stable proof-bearing closure.
+
+Those values authorize **verified reuse only**. They are not evidence that the
 dependency graph was rebuilt from source on every routine run.
 
 ### Project rebuild and audit
@@ -91,13 +103,13 @@ After both dependency identities are accepted:
 7. generated-axiom and malformed-unchecked-theorem negative fixtures must fail
    for the expected reasons.
 
-A cache mismatch fails closed.  CI does not silently replace a failed
+A cache mismatch fails closed. CI does not silently replace a failed
 verification with trust in the cache key.
 
 ## Cold-trust lane
 
 `.github/workflows/lean-cold-trust.yml` is manually dispatched and restores no
-Lean dependency source or build cache.  It is the only workflow intended to
+Lean dependency source or build cache. It is the only workflow intended to
 support the statement:
 
 > the dependency graph was reconstructed from pinned source under the cold
@@ -105,8 +117,8 @@ support the statement:
 
 The cold lane must use the same Lean/toolchain/dependency declarations and the
 same final project kernel/semantic audits, but its dependency build receipt is
-run-local evidence rather than the routine cache anchor.  Routine and cold
-wall times must be reported separately.
+run-local evidence rather than the routine cache anchor. Routine and cold wall
+times must be reported separately.
 
 ## Rollback conditions
 
