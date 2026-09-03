@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Derive a frozen Lean import path and complete project module set.
+"""Derive the frozen Lean import layout for the protected COSMO audit.
 
-The audit phase must not execute project Lake configuration.  This helper reads
-the already-frozen Lake artifact layout, classifies local path packages from the
-Lake manifest, rejects symlinked output paths, and emits deterministic files for
-direct `lean` / `leanchecker` invocations.
+Protected CI intentionally supports one top-level COSMO package plus pinned
+external dependencies. Local `type: "path"` Lake packages are rejected in this
+baseline rather than recursively trusting mutable nested manifests. Project
+outputs must use the standard `.lake/build/lib/lean` directory. Every project
+`.olean` artifact path is passed to the trusted Lean runner, which derives the
+exact module `Name` from Lean's own artifact metadata/search-path machinery.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import argparse
 import json
 import os
 import stat
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,9 +29,9 @@ class AuditLayoutError(RuntimeError):
 @dataclass(frozen=True)
 class Analysis:
     lean_path_entries: tuple[Path, ...]
+    trusted_path_entries: tuple[Path, ...]
     project_output_dirs: tuple[Path, ...]
-    project_modules: tuple[str, ...]
-    project_package_roots: tuple[Path, ...]
+    project_artifacts: tuple[Path, ...]
 
 
 def _absolute(path: Path, *, relative_to: Path | None = None) -> Path:
@@ -66,6 +69,8 @@ def _reject_symlink_components(path: Path, root: Path, *, description: str) -> N
 
 
 def _load_manifest(path: Path) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise AuditLayoutError(f"Lake manifest is missing or symlinked: {path}")
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
@@ -75,213 +80,142 @@ def _load_manifest(path: Path) -> dict[str, Any]:
     return value
 
 
-def _collect_manifest_regions(
-    manifest: Path,
-    workspace: Path,
-    *,
-    project_roots: set[Path],
-    package_dirs: set[Path],
-    seen: set[Path],
-) -> None:
-    manifest = _absolute(manifest)
-    _require_within(manifest, workspace, description="Lake manifest")
-    _reject_symlink_components(manifest, workspace, description="Lake manifest")
-    if manifest in seen:
-        return
-    seen.add(manifest)
-
+def _manifest_packages_dir(manifest: Path, workspace: Path) -> Path:
     data = _load_manifest(manifest)
-    manifest_root = manifest.parent
-
-    packages_dir_value = data.get("packagesDir", ".lake/packages")
-    if not isinstance(packages_dir_value, str) or not packages_dir_value:
+    value = data.get("packagesDir", ".lake/packages")
+    if not isinstance(value, str) or not value:
         raise AuditLayoutError(f"invalid packagesDir in {manifest}")
-    packages_dir = _absolute(Path(packages_dir_value), relative_to=manifest_root)
+    packages_dir = _absolute(Path(value), relative_to=manifest.parent)
     _require_within(packages_dir, workspace, description="Lake packages directory")
-    package_dirs.add(packages_dir)
+    _reject_symlink_components(
+        packages_dir, workspace, description="Lake packages directory"
+    )
 
     packages = data.get("packages", [])
     if not isinstance(packages, list):
         raise AuditLayoutError(f"invalid packages list in {manifest}")
-
     for package in packages:
-        if not isinstance(package, dict) or package.get("type") != "path":
-            continue
-        directory = package.get("dir")
-        if not isinstance(directory, str) or not directory:
-            raise AuditLayoutError(f"path package without a directory in {manifest}")
-        package_root = _absolute(Path(directory), relative_to=manifest_root)
-        _require_within(package_root, workspace, description="local Lake package")
-        _reject_symlink_components(
-            package_root, workspace, description="local Lake package root"
-        )
-        project_roots.add(package_root)
-
-        manifest_name = package.get("manifestFile", "lake-manifest.json")
-        if not isinstance(manifest_name, str) or not manifest_name:
+        if not isinstance(package, dict):
+            raise AuditLayoutError(f"invalid package entry in {manifest}")
+        if package.get("type") == "path":
+            name = package.get("name", "<unnamed>")
             raise AuditLayoutError(
-                f"invalid local package manifest name for {package_root}"
+                "protected COSMO baseline forbids local Lake path packages; "
+                f"found {name!r} in {manifest}"
             )
-        nested_manifest = _absolute(Path(manifest_name), relative_to=package_root)
-        if nested_manifest.exists():
-            _collect_manifest_regions(
-                nested_manifest,
-                workspace,
-                project_roots=project_roots,
-                package_dirs=package_dirs,
-                seen=seen,
-            )
+    return packages_dir
 
 
-def _contains_build_segment(path: Path, workspace: Path) -> bool:
-    parts = path.relative_to(workspace).parts
-    return any(
-        parts[index] == ".lake" and parts[index + 1] == "build"
-        for index in range(len(parts) - 1)
-    )
+def _standard_output(root: Path) -> Path:
+    return root / ".lake" / "build" / "lib" / "lean"
 
 
-def _discover_output_dirs(workspace: Path, package_dirs: set[Path]) -> set[Path]:
-    output_dirs: set[Path] = set()
+def _is_lake_config_olean(path: Path) -> bool:
+    parts = path.parts
+    return len(parts) >= 2 and parts[-2:] == (".lake", "lakefile.olean")
 
+
+def _contains(path: Path, root: Path) -> bool:
+    return _is_within(path, root)
+
+
+def _validate_workspace_oleans(
+    workspace: Path, allowed_outputs: tuple[Path, ...]
+) -> None:
     for current_text, directory_names, file_names in os.walk(
         workspace, topdown=True, followlinks=False
     ):
         current = Path(current_text)
-
         for name in list(directory_names):
             candidate = current / name
             if candidate.is_symlink():
-                direct_package_link = any(candidate.parent == root for root in package_dirs)
-                if direct_package_link or _contains_build_segment(candidate, workspace):
+                relative = candidate.relative_to(workspace)
+                if ".lake" in relative.parts:
                     raise AuditLayoutError(
-                        f"symlink in Lean package/output path is forbidden: {candidate}"
+                        f"symlink in Lean state/output tree is forbidden: {candidate}"
                     )
                 directory_names.remove(name)
 
         for name in file_names:
+            if not name.endswith(".olean"):
+                continue
             candidate = current / name
-            if candidate.is_symlink() and _contains_build_segment(candidate, workspace):
+            mode = candidate.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                raise AuditLayoutError(f"symlinked .olean is forbidden: {candidate}")
+            if not stat.S_ISREG(mode):
+                raise AuditLayoutError(f"non-regular .olean is forbidden: {candidate}")
+            if _is_lake_config_olean(candidate):
+                continue
+            if not any(_contains(candidate, output) for output in allowed_outputs):
                 raise AuditLayoutError(
-                    f"symlinked Lean build artifact is forbidden: {candidate}"
+                    "Lean .olean exists outside inventoried standard output "
+                    f"directories: {candidate}"
                 )
 
-        relative_parts = current.relative_to(workspace).parts
-        if len(relative_parts) >= 4 and relative_parts[-4:] == (
-            ".lake",
-            "build",
-            "lib",
-            "lean",
-        ):
-            output_dirs.add(current)
 
-    if not output_dirs:
-        raise AuditLayoutError("no .lake/build/lib/lean directories found")
-    return output_dirs
-
-
-def _classify_region(
-    path: Path, *, project_roots: set[Path], package_dirs: set[Path]
-) -> str:
-    matches: list[tuple[int, int, str]] = []
-    for root in project_roots:
-        if _is_within(path, root):
-            matches.append((len(root.parts), 1, "project"))
-    for root in package_dirs:
-        if _is_within(path, root):
-            matches.append((len(root.parts), 0, "external"))
-    if not matches:
-        raise AuditLayoutError(f"cannot classify Lean output directory: {path}")
-    return max(matches)[2]
-
-
-def _module_name(output_dir: Path, olean: Path) -> str:
-    relative = olean.relative_to(output_dir)
-    if relative.suffix != ".olean":
-        raise AuditLayoutError(f"unexpected Lean artifact suffix: {olean}")
-    parts = list(relative.with_suffix("").parts)
-    if not parts or any(not part for part in parts):
-        raise AuditLayoutError(f"cannot derive Lean module name from {olean}")
-    return ".".join(parts)
-
-
-def analyze(workspace: Path, manifest: Path) -> Analysis:
+def analyze(workspace: Path, manifest: Path, toolchain_lib: Path) -> Analysis:
     workspace = _absolute(workspace)
     manifest = _absolute(manifest, relative_to=workspace)
-    if not workspace.is_dir():
-        raise AuditLayoutError(f"frozen workspace is not a directory: {workspace}")
+    toolchain_lib = _absolute(toolchain_lib)
+    if not workspace.is_dir() or workspace.is_symlink():
+        raise AuditLayoutError(f"frozen workspace is not a regular directory: {workspace}")
+    if not toolchain_lib.is_dir() or toolchain_lib.is_symlink():
+        raise AuditLayoutError(f"trusted Lean library root is invalid: {toolchain_lib}")
 
-    project_roots: set[Path] = {workspace}
-    package_dirs: set[Path] = set()
-    _collect_manifest_regions(
-        manifest,
-        workspace,
-        project_roots=project_roots,
-        package_dirs=package_dirs,
-        seen=set(),
+    _reject_symlink_components(manifest, workspace, description="Lake manifest")
+    packages_dir = _manifest_packages_dir(manifest, workspace)
+
+    project_output = _standard_output(workspace)
+    _reject_symlink_components(
+        project_output, workspace, description="project Lean output directory"
     )
-
-    output_dirs = _discover_output_dirs(workspace, package_dirs)
-    classified = {
-        output_dir: _classify_region(
-            output_dir, project_roots=project_roots, package_dirs=package_dirs
-        )
-        for output_dir in output_dirs
-    }
-    project_output_dirs = {
-        output_dir for output_dir, kind in classified.items() if kind == "project"
-    }
-    if not project_output_dirs:
-        raise AuditLayoutError("no project-controlled Lean output directories found")
-
-    top_level_output = workspace / ".lake" / "build" / "lib" / "lean"
-    if top_level_output not in project_output_dirs:
+    if not project_output.is_dir():
         raise AuditLayoutError(
-            "top-level package did not produce the standard .lake/build/lib/lean output"
+            "top-level package did not produce standard .lake/build/lib/lean output"
         )
 
-    all_modules: dict[str, list[tuple[Path, str]]] = {}
-    for output_dir in sorted(output_dirs, key=str):
-        kind = classified[output_dir]
-        for olean in sorted(output_dir.rglob("*.olean"), key=str):
-            mode = olean.lstat().st_mode
-            if stat.S_ISLNK(mode):
-                raise AuditLayoutError(f"symlinked .olean is forbidden: {olean}")
-            if not stat.S_ISREG(mode):
-                raise AuditLayoutError(f"non-regular .olean is forbidden: {olean}")
-            module = _module_name(output_dir, olean)
-            all_modules.setdefault(module, []).append((olean, kind))
-
-    project_modules: set[str] = set()
-    for module, locations in all_modules.items():
-        project_locations = [path for path, kind in locations if kind == "project"]
-        if not project_locations:
+    external_outputs: list[Path] = []
+    for package in sorted(packages_dir.iterdir(), key=lambda path: path.name):
+        if package.is_symlink():
+            raise AuditLayoutError(f"symlinked dependency package: {package}")
+        if not package.is_dir():
             continue
-        if len(locations) != 1:
-            rendered = ", ".join(str(path) for path, _kind in locations)
-            raise AuditLayoutError(
-                f"project module {module} is shadowed by multiple artifacts: {rendered}"
+        output = _standard_output(package)
+        if output.exists():
+            _reject_symlink_components(
+                output, workspace, description="dependency Lean output directory"
             )
-        project_modules.add(module)
+            if not output.is_dir():
+                raise AuditLayoutError(f"invalid dependency Lean output: {output}")
+            external_outputs.append(output)
 
-    if not project_modules:
-        raise AuditLayoutError("no project-controlled Lean modules found")
+    allowed_outputs = tuple(external_outputs + [project_output])
+    _validate_workspace_oleans(workspace, allowed_outputs)
 
-    external_dirs = sorted(
-        (path for path, kind in classified.items() if kind == "external"), key=str
-    )
-    local_dirs = sorted(project_output_dirs, key=str)
-    lean_path_entries = tuple(external_dirs + local_dirs)
-    for path in lean_path_entries:
+    project_artifacts: list[Path] = []
+    for artifact in sorted(project_output.rglob("*.olean"), key=str):
+        mode = artifact.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise AuditLayoutError(f"symlinked project .olean is forbidden: {artifact}")
+        if not stat.S_ISREG(mode):
+            raise AuditLayoutError(f"non-regular project .olean is forbidden: {artifact}")
+        project_artifacts.append(artifact)
+    if not project_artifacts:
+        raise AuditLayoutError("no project-controlled Lean .olean artifacts found")
+
+    trusted_entries = tuple(external_outputs + [toolchain_lib])
+    lean_entries = tuple(external_outputs + [toolchain_lib, project_output])
+    for path in lean_entries:
         rendered = str(path)
         if os.pathsep in rendered or "\n" in rendered or "\0" in rendered:
             raise AuditLayoutError(f"unsafe Lean import path: {path}")
 
     return Analysis(
-        lean_path_entries=lean_path_entries,
-        project_output_dirs=tuple(local_dirs),
-        project_modules=tuple(sorted(project_modules)),
-        project_package_roots=tuple(sorted(project_roots, key=str)),
+        lean_path_entries=lean_entries,
+        trusted_path_entries=trusted_entries,
+        project_output_dirs=(project_output,),
+        project_artifacts=tuple(project_artifacts),
     )
 
 
@@ -294,30 +228,26 @@ def _write_private(path: Path, content: str) -> None:
 def self_test() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        root_output = workspace / ".lake/build/lib/lean"
-        external_output = workspace / ".lake/packages/external/.lake/build/lib/lean"
-        local_root = workspace / ".lake/packages/local"
-        local_output = local_root / ".lake/build/lib/lean"
-        for directory in (root_output, external_output, local_output):
+        root_output = _standard_output(workspace)
+        external_root = workspace / ".lake" / "packages" / "external"
+        external_output = _standard_output(external_root)
+        toolchain_lib = workspace / "trusted-toolchain-lib"
+        for directory in (root_output, external_output, toolchain_lib):
             directory.mkdir(parents=True)
 
         (root_output / "Root.olean").write_bytes(b"root")
+        quoted = root_output / "Foo" / "Bar.Baz.olean"
+        quoted.parent.mkdir(parents=True)
+        quoted.write_bytes(b"quoted")
         (external_output / "External.olean").write_bytes(b"external")
-        (local_output / "Local.olean").write_bytes(b"local")
-        (workspace / "lake-manifest.json").write_text(
+        (workspace / ".lake" / "lakefile.olean").write_bytes(b"config")
+        manifest = workspace / "lake-manifest.json"
+        manifest.write_text(
             json.dumps(
                 {
                     "version": "1.2.0",
                     "packagesDir": ".lake/packages",
-                    "packages": [
-                        {"type": "git", "name": "external"},
-                        {
-                            "type": "path",
-                            "name": "local",
-                            "dir": ".lake/packages/local",
-                            "manifestFile": "lake-manifest.json",
-                        },
-                    ],
+                    "packages": [{"type": "git", "name": "external"}],
                     "name": "fixture",
                     "lakeDir": ".lake",
                 }
@@ -325,19 +255,57 @@ def self_test() -> None:
             encoding="utf-8",
         )
 
-        result = analyze(workspace, workspace / "lake-manifest.json")
-        assert result.project_modules == ("Local", "Root")
-        assert local_output in result.project_output_dirs
-        assert external_output in result.lean_path_entries
+        result = analyze(workspace, manifest, toolchain_lib)
+        assert quoted in result.project_artifacts
+        assert root_output in result.project_output_dirs
+        assert external_output in result.trusted_path_entries
+        assert result.lean_path_entries[-1] == root_output
 
         hidden = root_output / "Hidden.olean"
         hidden.symlink_to(root_output / "Root.olean")
         try:
-            analyze(workspace, workspace / "lake-manifest.json")
+            analyze(workspace, manifest, toolchain_lib)
         except AuditLayoutError as error:
             assert "symlink" in str(error)
         else:
             raise AssertionError("symlinked module output was accepted")
+        hidden.unlink()
+
+        custom = workspace / ".lake" / "hidden" / "lib" / "lean" / "Escape.olean"
+        custom.parent.mkdir(parents=True)
+        custom.write_bytes(b"escape")
+        try:
+            analyze(workspace, manifest, toolchain_lib)
+        except AuditLayoutError as error:
+            assert "outside inventoried" in str(error)
+        else:
+            raise AssertionError("custom hidden Lean output was accepted")
+        custom.unlink()
+
+        manifest.write_text(
+            json.dumps(
+                {
+                    "version": "1.2.0",
+                    "packagesDir": ".lake/packages",
+                    "packages": [
+                        {
+                            "type": "path",
+                            "name": "local",
+                            "dir": ".lake/packages/local",
+                        }
+                    ],
+                    "name": "fixture",
+                    "lakeDir": ".lake",
+                }
+            ),
+            encoding="utf-8",
+        )
+        try:
+            analyze(workspace, manifest, toolchain_lib)
+        except AuditLayoutError as error:
+            assert "forbids local Lake path packages" in str(error)
+        else:
+            raise AssertionError("local path package was accepted")
 
     print("Lean audit layout self-test passed.")
 
@@ -347,8 +315,10 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--toolchain-lib", type=Path)
     parser.add_argument("--lean-path-output", type=Path)
-    parser.add_argument("--modules-output", type=Path)
+    parser.add_argument("--trusted-lean-path-output", type=Path)
+    parser.add_argument("--artifacts-output", type=Path)
     args = parser.parse_args()
 
     if args.self_test:
@@ -358,41 +328,48 @@ def main() -> int:
     required = {
         "--workspace": args.workspace,
         "--manifest": args.manifest,
+        "--toolchain-lib": args.toolchain_lib,
         "--lean-path-output": args.lean_path_output,
-        "--modules-output": args.modules_output,
+        "--trusted-lean-path-output": args.trusted_lean_path_output,
+        "--artifacts-output": args.artifacts_output,
     }
     missing = [name for name, value in required.items() if value is None]
     if missing:
         parser.error(f"missing required arguments: {', '.join(missing)}")
 
+    assert args.workspace is not None
+    assert args.manifest is not None
+    assert args.toolchain_lib is not None
     try:
-        result = analyze(args.workspace, args.manifest)
+        result = analyze(args.workspace, args.manifest, args.toolchain_lib)
     except AuditLayoutError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
 
     assert args.lean_path_output is not None
-    assert args.modules_output is not None
+    assert args.trusted_lean_path_output is not None
+    assert args.artifacts_output is not None
     _write_private(
         args.lean_path_output,
         os.pathsep.join(str(path) for path in result.lean_path_entries) + "\n",
     )
     _write_private(
-        args.modules_output,
-        "".join(f"{module}\n" for module in result.project_modules),
+        args.trusted_lean_path_output,
+        os.pathsep.join(str(path) for path in result.trusted_path_entries) + "\n",
+    )
+    _write_private(
+        args.artifacts_output,
+        "".join(f"{artifact}\n" for artifact in result.project_artifacts),
     )
 
     print(
         "Frozen Lean audit layout prepared: "
-        f"{len(result.project_package_roots)} project package root(s), "
         f"{len(result.project_output_dirs)} project output dir(s), "
-        f"{len(result.project_modules)} project module(s), and "
+        f"{len(result.project_artifacts)} project artifact(s), and "
         f"{len(result.lean_path_entries)} total import path(s)."
     )
-    for root in result.project_package_roots:
-        print(f"  project package root: {root}")
-    for module in result.project_modules:
-        print(f"  project module: {module}")
+    for artifact in result.project_artifacts:
+        print(f"  project artifact: {artifact}")
     return 0
 
 
