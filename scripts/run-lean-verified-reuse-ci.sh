@@ -17,6 +17,8 @@ DEPENDENCY_RECEIPT="$RUNNER_TEMP/cosmo-dependency-run-receipt.json"
 LEAN_PATH_FILE="$RUNNER_TEMP/cosmo-lean-path.txt"
 TRUSTED_LEAN_PATH_FILE="$RUNNER_TEMP/cosmo-trusted-lean-path.txt"
 ARTIFACTS_FILE="$RUNNER_TEMP/cosmo-project-artifacts.txt"
+SOURCE_CACHE_RECEIPT="$COSMO_BUILD_WORKSPACE/.lean-cache/source-receipt.json"
+SOURCE_CACHE_RECEIPT_SHA=""
 
 begin_group() { printf '::group::%s\n' "$1"; }
 end_group() { printf '::endgroup::\n'; }
@@ -73,6 +75,22 @@ fi
 if sudo -u cosmobuild test -w "$COSMO_BUILD_WORKSPACE/lake-manifest.json"; then
   echo "ERROR: build identity can write frozen Lake manifest." >&2
   exit 1
+fi
+
+# The routine source-cache receipt is generated verification metadata, not
+# reviewed project source. If present, authenticate and freeze it explicitly so
+# the protected source-closure check can allow exactly this one untracked path.
+if [ -e "$SOURCE_CACHE_RECEIPT" ] || [ -L "$SOURCE_CACHE_RECEIPT" ]; then
+  if [ -L "$SOURCE_CACHE_RECEIPT" ] || [ ! -f "$SOURCE_CACHE_RECEIPT" ]; then
+    echo "ERROR: source-cache receipt is missing, non-regular, or symlinked." >&2
+    exit 1
+  fi
+  SOURCE_CACHE_RECEIPT_SHA="$(sha256sum "$SOURCE_CACHE_RECEIPT" | awk '{print $1}')"
+  if sudo -u cosmobuild test -w "$SOURCE_CACHE_RECEIPT"; then
+    echo "ERROR: build identity can write frozen source-cache receipt." >&2
+    exit 1
+  fi
+  echo "Frozen source-cache receipt sha256=$SOURCE_CACHE_RECEIPT_SHA"
 fi
 end_group
 
@@ -213,6 +231,18 @@ if [ -n "$COSMO_DEPENDENCY_ANCHOR" ]; then
     --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
     --anchor "$COSMO_DEPENDENCY_ANCHOR"
 fi
+
+if [ -n "$SOURCE_CACHE_RECEIPT_SHA" ]; then
+  if [ -L "$SOURCE_CACHE_RECEIPT" ] || [ ! -f "$SOURCE_CACHE_RECEIPT" ]; then
+    echo "ERROR: frozen source-cache receipt disappeared or changed type." >&2
+    exit 1
+  fi
+  actual_source_receipt_sha="$(sha256sum "$SOURCE_CACHE_RECEIPT" | awk '{print $1}')"
+  if [ "$actual_source_receipt_sha" != "$SOURCE_CACHE_RECEIPT_SHA" ]; then
+    echo "ERROR: frozen source-cache receipt changed during COSMO compilation." >&2
+    exit 1
+  fi
+fi
 end_group
 
 begin_group "Verify isolated COSMO source stayed identical"
@@ -228,6 +258,10 @@ reviewed = Path(os.environ["GITHUB_WORKSPACE"])
 built = Path(os.environ["COSMO_BUILD_WORKSPACE"])
 tracked_raw = subprocess.check_output(["git", "ls-files", "-z"], cwd=reviewed)
 tracked = {Path(os.fsdecode(item)) for item in tracked_raw.split(b"\0") if item}
+approved_generated = {
+    Path("lake-manifest.json"),
+    Path(".lean-cache/source-receipt.json"),
+}
 
 def fingerprint(path: Path) -> tuple[str, str, int]:
     info = path.lstat()
@@ -252,7 +286,7 @@ for path in built.rglob("*"):
     relative = path.relative_to(built)
     if not relative.parts or relative.parts[0] == ".lake":
         continue
-    if relative == Path("lake-manifest.json"):
+    if relative in approved_generated:
         continue
     if path.is_file() or path.is_symlink():
         actual.add(relative)
