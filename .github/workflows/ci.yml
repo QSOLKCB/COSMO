@@ -24,7 +24,7 @@ env:
   TZ: UTC
   PYTHONHASHSEED: "0"
   COSMO_BUILD_WORKSPACE: /tmp/cosmo-build-workspace
-  COSMO_AUDIT_WORKSPACE: /tmp/cosmo-audit-workspace
+  COSMO_AUDIT_WORKSPACE: /tmp/cosmo-build-workspace/.cosmo-audit
 
 jobs:
   lean:
@@ -73,7 +73,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "$COSMO_BUILD_WORKSPACE" "$COSMO_AUDIT_WORKSPACE"
+          rm -rf "$COSMO_BUILD_WORKSPACE"
           mkdir -p "$COSMO_BUILD_WORKSPACE"
           git archive --format=tar HEAD | tar -xf - -C "$COSMO_BUILD_WORKSPACE"
 
@@ -101,7 +101,7 @@ jobs:
 
           sudo install -d -o cosmobuild -g cosmobuild -m 0700 /tmp/cosmobuild-home
           sudo install -d -o cosmoaudit -g cosmoaudit -m 0700 /tmp/cosmoaudit-home
-          sudo install -d -o cosmoaudit -g cosmoaudit -m 0700 "$COSMO_AUDIT_WORKSPACE"
+          sudo install -d -o cosmobuild -g cosmobuild -m 0700 "$COSMO_AUDIT_WORKSPACE"
           sudo chown -R cosmobuild:cosmobuild "$COSMO_BUILD_WORKSPACE"
 
           # The build identity can write only its disposable workspace and home.
@@ -214,7 +214,7 @@ jobs:
               relative = path.relative_to(built)
               if not relative.parts:
                   continue
-              if relative.parts[0] == ".lake":
+              if relative.parts[0] in {".lake", ".cosmo-audit"}:
                   continue
               if relative == Path("lake-manifest.json"):
                   continue
@@ -235,18 +235,30 @@ jobs:
           )
           PY
 
-      - name: Freeze project outputs
+      - name: Freeze project outputs and recreate clean audit enclave
         shell: bash
         run: |
           set -euo pipefail
           sudo chown -R root:root "$COSMO_BUILD_WORKSPACE"
           sudo chmod -R a+rX "$COSMO_BUILD_WORKSPACE"
           sudo chmod -R a-w "$COSMO_BUILD_WORKSPACE"
+
+          # The build identity owned this empty placeholder. Remove it only after
+          # every build process is dead, then create a fresh audit-owned enclave
+          # inside the frozen package root so Lean accepts its source path.
+          sudo rm -rf "$COSMO_AUDIT_WORKSPACE"
+          sudo install -d -o cosmoaudit -g cosmoaudit -m 0700 "$COSMO_AUDIT_WORKSPACE"
+
           if sudo -u cosmoaudit test -w "$COSMO_BUILD_WORKSPACE/lakefile.lean"; then
             echo "ERROR: audit identity can write the frozen project declaration."
             exit 1
           fi
+          if sudo -u cosmobuild test -w "$COSMO_AUDIT_WORKSPACE"; then
+            echo "ERROR: terminated build identity can write the clean audit enclave."
+            exit 1
+          fi
           sudo -u cosmoaudit test -r "$COSMO_BUILD_WORKSPACE/lakefile.lean"
+          sudo -u cosmoaudit test -w "$COSMO_AUDIT_WORKSPACE"
 
       - name: Capture every built project module
         shell: bash
