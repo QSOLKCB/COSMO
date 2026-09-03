@@ -18,3 +18,4 @@ lean_lib «cosmovirus» where
   -- Keep one package root so importing `COSMO` loads every built declaration
   -- into the semantic audit environment.
   roots := #[`COSMO]
+  globs := #[.one `COSMO, .one `CosmoTrust, .one `cosmovirus]
