@@ -5,9 +5,9 @@ This is the source half of COSMO Phase B1 / OPT-LEAN-001.  Compiled
 artifacts are authenticated separately.  The verifier deliberately does not
 trust `git status`, repository-local hooks/configuration, replacement refs, or
 index shortcuts.  For each manifest Git package it checks the exact revision,
-rehashes the stored Git object database, verifies tracked bytes and modes, and
-checks the complete worktree closure after generated package `.lake` state has
-been removed.
+independently rehashes the pinned commit and every reachable tree object,
+verifies tracked bytes and modes, and checks the complete worktree closure
+after generated package `.lake` state has been removed.
 """
 
 from __future__ import annotations
@@ -221,13 +221,33 @@ def ensure_no_symlink_parents(root: Path, rel: PurePosixPath, checked: set[Path]
         checked.add(current)
 
 
-def git_blob_oid(data: bytes, algorithm: str) -> str:
-    payload = f"blob {len(data)}\0".encode("ascii") + data
+def git_object_oid(kind: str, data: bytes, algorithm: str) -> str:
+    payload = f"{kind} {len(data)}\0".encode("ascii") + data
     if algorithm == "sha1":
         return hashlib.sha1(payload).hexdigest()
     if algorithm == "sha256":
         return hashlib.sha256(payload).hexdigest()
     raise SystemExit(f"unsupported Git object format: {algorithm}")
+
+
+def git_blob_oid(data: bytes, algorithm: str) -> str:
+    return git_object_oid("blob", data, algorithm)
+
+
+def verify_named_object(
+    path: Path,
+    package: str,
+    kind: str,
+    oid: str,
+    algorithm: str,
+) -> None:
+    data = run_git(path, "cat-file", kind, oid)
+    actual = git_object_oid(kind, data, algorithm).lower()
+    expected = oid.lower()
+    if actual != expected:
+        raise SystemExit(
+            f"stored Git {kind} object hash mismatch in {package}: {actual} != {expected}"
+        )
 
 
 def reject_object_redirection(path: Path, package: str) -> None:
@@ -236,20 +256,6 @@ def reject_object_redirection(path: Path, package: str) -> None:
         raise SystemExit(
             f"Git replacement refs are not allowed in {package}:\n{replace_refs}"
         )
-
-
-def verify_object_database(path: Path, package: str) -> None:
-    """Rehash stored Git objects before trusting commit/tree traversal."""
-
-    # `sanitize_git_metadata` has already rejected alternates, grafts, replace
-    # refs, hooks, and repository-local configuration.  A strict full fsck now
-    # recomputes object identities over the stored commit/tree/blob contents,
-    # so a poisoned cache cannot place forged commit or tree bytes under a
-    # manifest-pinned object name and then feed those bytes to `ls-tree`.
-    try:
-        run_git(path, "fsck", "--full", "--strict", "--no-reflogs", "--no-progress")
-    except SystemExit as error:
-        raise SystemExit(f"Git object-integrity verification failed in {package}: {error}") from error
 
 
 def reject_index_flags(path: Path, package: str) -> None:
@@ -307,7 +313,6 @@ def verify_worktree_closure(
 def verify_commit_tree(path: Path, package: str, revision: str) -> str:
     assert_sanitized_git_metadata(path, package)
     reject_object_redirection(path, package)
-    verify_object_database(path, package)
     reject_index_flags(path, package)
 
     generated_lake = path / ".lake"
@@ -317,7 +322,34 @@ def verify_commit_tree(path: Path, package: str, revision: str) -> str:
         )
 
     object_format = git_text(path, "rev-parse", "--show-object-format")
-    tree_oid = git_text(path, "rev-parse", f"{revision}^{{tree}}")
+    commit_oid = git_text(path, "rev-parse", f"{revision}^{{commit}}").lower()
+    if commit_oid != revision.lower():
+        raise SystemExit(
+            f"resolved commit object differs from manifest revision in {package}: "
+            f"{commit_oid} != {revision.lower()}"
+        )
+    verify_named_object(path, package, "commit", commit_oid, object_format)
+
+    tree_oid = git_text(path, "rev-parse", f"{revision}^{{tree}}").lower()
+
+    # Ask the trusted system Git parser only for the reachable tree object IDs,
+    # then independently rehash the raw bytes of every named tree before using
+    # the recursive file listing as source authority.
+    tree_listing = run_git(path, "ls-tree", "-r", "-t", "-z", "--full-tree", revision)
+    tree_oids = {tree_oid}
+    for record in tree_listing.split(b"\0"):
+        if not record:
+            continue
+        try:
+            header, _raw_path = record.split(b"\t", 1)
+            _mode_b, type_b, oid_b = header.split(b" ", 2)
+        except ValueError as error:
+            raise SystemExit(f"malformed git tree record in {package}: {record!r}") from error
+        if type_b == b"tree":
+            tree_oids.add(oid_b.decode("ascii").lower())
+    for oid in sorted(tree_oids):
+        verify_named_object(path, package, "tree", oid, object_format)
+
     raw = run_git(path, "ls-tree", "-r", "-z", "--full-tree", revision)
 
     checked_parents: set[Path] = set()
@@ -380,7 +412,7 @@ def verify_commit_tree(path: Path, package: str, revision: str) -> str:
         raise SystemExit(f"dependency commit tree contains no tracked entries: {package}")
 
     verify_worktree_closure(path, package, tracked_paths, tracked_dirs)
-    return tree_oid.lower()
+    return tree_oid
 
 
 def load_manifest(path: Path, expected_sha256: str) -> tuple[str, list[dict[str, Any]]]:
