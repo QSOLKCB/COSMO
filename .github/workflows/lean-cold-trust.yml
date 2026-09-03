@@ -263,12 +263,13 @@ jobs:
           ! sudo pgrep -u cosmodepbuild >/dev/null 2>&1
           end="$(date +%s)"
           echo "COLD_DEPENDENCY_BUILD_SECONDS=$((end-start))" >> "$GITHUB_ENV"
-          test -f "$mathlib/.lake/build/lib/lean/Mathlib/Tactic/Ring.olean"
 
-          # Freeze before any trusted post-build verification.
+          # The builder is dead. Freeze its generated outputs before the trusted
+          # side checks the expected imported root.
           sudo chown -R root:root "$mathlib"
           sudo chmod -R a+rX "$mathlib"
           sudo chmod -R a-w "$mathlib"
+          test -f "$mathlib/.lake/build/lib/lean/Mathlib/Tactic/Ring.olean"
 
       - name: Restore package layout and prove source stayed identical
         shell: bash
