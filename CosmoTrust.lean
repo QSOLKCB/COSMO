@@ -2,6 +2,7 @@ import Lean.Compiler.ModPkgExt
 import Lean.CoreM
 import Lean.Elab.Command
 import Lean.Environment
+import Lean.Replay
 import Lean.Util.CollectAxioms
 
 open Lean Meta Elab Command
@@ -156,6 +157,59 @@ meta def auditImportedPackagesFrom
 meta def auditImportedPackageFrom (anchorModule : Name) : CommandElabM Unit :=
   auditImportedPackagesFrom #[anchorModule]
 
+/--
+Replay one frozen module using the same kernel replay mechanism used by the
+pinned `leanchecker` executable. The module's imports are reconstructed first,
+then every constant emitted by the target module is replayed through the kernel.
+-/
+private unsafe def replayModule (moduleName : Name) : IO Unit := do
+  let olean ← findOLean moduleName
+  unless (← olean.pathExists) do
+    throw <| IO.userError s!"object file '{olean}' of module {moduleName} does not exist"
+
+  let mut files := #[olean]
+  let serverFile := OLeanLevel.server.adjustFileName olean
+  if ← serverFile.pathExists then
+    files := files.push serverFile
+    let privateFile := OLeanLevel.private.adjustFileName olean
+    if ← privateFile.pathExists then
+      files := files.push privateFile
+
+  let parts ← readModuleDataParts files
+  if parts.isEmpty then
+    throw <| IO.userError s!"failed to read module data for {moduleName}"
+
+  let moduleData := parts[0]!.1
+  let (_, state) ← importModulesCore moduleData.imports |>.run
+  let env ← finalizeImport state moduleData.imports {} 0 false false (isModule := true)
+  let mut constants := {}
+  let lastPart := parts[parts.size - 1]!.1
+  for name in lastPart.constNames, info in lastPart.constants do
+    constants := constants.insert name info
+  let replayed ← env.replay constants
+  replayed.freeRegions
+
+/--
+Resolve one absolute `.olean` path to Lean's exact module `Name`.
+
+`searchModuleNameOfFileName` preserves quoted/name components using Lean's own
+artifact/search-path semantics. We additionally require `findOLean` to resolve
+that `Name` back to the exact same real file. A project artifact that shadows a
+trusted toolchain or dependency module therefore fails before replay/auditing.
+-/
+private unsafe def moduleNameForArtifact
+    (searchPath : SearchPath) (artifactText : String) : IO Name := do
+  let artifact : System.FilePath := ⟨artifactText⟩
+  let artifactReal ← IO.FS.realPath artifact
+  let some moduleName ← searchModuleNameOfFileName artifactReal searchPath
+    | throw <| IO.userError s!"cannot derive Lean module name from {artifactReal}"
+  let resolved ← findOLean moduleName
+  let resolvedReal ← IO.FS.realPath resolved
+  unless resolvedReal == artifactReal do
+    throw <| IO.userError
+      s!"project module {moduleName} is shadowed: expected {artifactReal}, resolved {resolvedReal}"
+  return moduleName
+
 private def runProtectedAudit
     (env : Environment) (modules : Array Name) : IO Unit :=
   Core.CoreM.toIO'
@@ -163,16 +217,31 @@ private def runProtectedAudit
     (s := { env }) do
       let declarationCount ← auditImportedModulesCore modules
       IO.println
-        s!"COSMO_PROTECTED_AUDIT_COMPLETE modules={modules.size} declarations={declarationCount} project_initializers=not_executed"
+        s!"COSMO_PROTECTED_AUDIT_COMPLETE modules={modules.size} declarations={declarationCount} kernel_replay=verified project_initializers=not_executed"
 
 /--
-Load frozen project modules without executing their `initialize` actions, then
-audit every declaration emitted by exactly those captured modules.
+Kernel-replay frozen project artifacts, then load and semantically audit their
+exact modules without executing imported project `initialize` actions.
+
+CLI arguments are absolute `.olean` paths, not dotted module-name strings. This
+avoids lossy `String.toName` conversion for valid names such as
+`Foo.«Bar.Baz»` and binds each audited name back to the exact captured artifact.
 -/
 unsafe def _root_.main (args : List String) : IO Unit := do
-  let modules := args.toArray.map String.toName
-  if modules.isEmpty then
-    throw <| IO.userError "COSMO protected audit requires at least one module name."
+  if args.isEmpty then
+    throw <| IO.userError "COSMO protected audit requires at least one .olean artifact."
+
+  initSearchPath (← findSysroot)
+  let searchPath ← searchPathRef.get
+  let mut modules : Array Name := #[]
+  for artifact in args do
+    let moduleName ← moduleNameForArtifact searchPath artifact
+    unless modules.contains moduleName do
+      modules := modules.push moduleName
+
+  for moduleName in modules do
+    replayModule moduleName
+
   let imports := modules.map fun moduleName =>
     { module := moduleName : Lean.Import }
   Lean.withImportModules imports {} fun env =>
