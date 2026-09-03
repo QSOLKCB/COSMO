@@ -1,0 +1,131 @@
+name: COSMO CI
+
+on:
+  # PR branches are validated by pull_request. Restrict push CI to main so a
+  # PR head does not consume a duplicate push run.
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cosmo-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LC_ALL: C.UTF-8
+  LANG: C.UTF-8
+  TZ: UTC
+  PYTHONHASHSEED: "0"
+  COSMO_BUILD_WORKSPACE: /tmp/cosmo-build-workspace
+  COSMO_AUDIT_WORKSPACE: /tmp/cosmo-audit-workspace
+
+jobs:
+  lean:
+    name: Lean 4 formal integrity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install pinned Lean toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain leanprover/lean4:v4.33.1
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+          # Force the distribution to be installed before privilege separation.
+          "$HOME/.elan/bin/lean" --version
+          "$HOME/.elan/bin/lake" --version
+          lean_bin="$("$HOME/.elan/bin/elan" which lean)"
+          lean_home="$(dirname "$(dirname "$lean_bin")")"
+          test -x "$lean_home/bin/lean"
+          test -x "$lean_home/bin/lake"
+          test -x "$lean_home/bin/leanchecker"
+          echo "PINNED_LEAN_HOME=$lean_home" >> "$GITHUB_ENV"
+
+      - name: Configure bounded Lean parallelism
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpus="$(nproc)"
+          workers="$cpus"
+          if [ "$workers" -gt 4 ]; then workers=4; fi
+          if [ "$workers" -lt 1 ]; then workers=1; fi
+          echo "LEAN_NUM_THREADS=${workers}" >> "$GITHUB_ENV"
+          echo "Lean will use ${workers} thread(s) on ${cpus} runner CPU(s)."
+
+      - name: Materialize isolated build workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$COSMO_BUILD_WORKSPACE" "$COSMO_AUDIT_WORKSPACE"
+          mkdir -p "$COSMO_BUILD_WORKSPACE"
+          git archive --format=tar HEAD | tar -xf - -C "$COSMO_BUILD_WORKSPACE"
+
+      # Cache only dependency package state. `lake-manifest.json` is deliberately
+      # excluded and is regenerated unconditionally before project compilation.
+      # Restored dependency proof artifacts are kernel-validated and snapshotted
+      # before the project build identity receives any writable output path.
+      - name: Restore Lean dependency/build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: /tmp/cosmo-build-workspace/.lake/packages
+          key: cosmo-lean-deps-v4-${{ runner.os }}-x86_64-lean-4.33.1-${{ hashFiles('lean-toolchain', 'lakefile.lean') }}
+
+      - name: Thaw restored dependency cache for refresh
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages="$COSMO_BUILD_WORKSPACE/.lake/packages"
+          if [ -d "$packages" ]; then
+            # Successful integrity runs deliberately save this tree read-only.
+            # Lake must be able to refresh Git metadata before the new run takes
+            # its trust snapshot. The integrity script subsequently re-owns the
+            # entire workspace as root and removes all write bits before any
+            # COSMO module is compiled.
+            sudo chmod -R u+rwX "$packages"
+          fi
+
+      - name: Run isolated Lean integrity pipeline
+        shell: bash
+        run: bash scripts/run-lean-integrity-ci.sh
+
+  python:
+    name: Python deterministic core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install development checks
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Static type check
+        run: mypy --strict cosmovirus.py tests/test_cosmovirus.py
+
+      - name: Bytecode compile check
+        run: python -m compileall -q cosmovirus.py tests
