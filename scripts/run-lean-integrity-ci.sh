@@ -169,8 +169,8 @@ sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
 sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
   "$staging/GeneratedUncheckedTheorem.lean" "$COSMO_AUDIT_WORKSPACE/GeneratedUncheckedTheorem.lean"
 
-# Make the enclave itself Lean's source root. The compiler still sees only the
-# pinned toolchain, so no dependency or project module can shadow auditor imports.
+# Make the enclave itself Lean's source root. The compiler sees only the pinned
+# toolchain here, so dependency/project modules cannot shadow auditor imports.
 sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
   LEAN_PATH="$TOOLCHAIN_LIB" LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
@@ -186,39 +186,10 @@ rm -rf "$staging"
 trap cleanup EXIT
 end_group
 
-begin_group "Kernel-verify frozen dependency environment"
-dependency_lean_path="$TOOLCHAIN_LIB"
-dependency_libs=0
-for pkg in "$COSMO_BUILD_WORKSPACE"/.lake/packages/*; do
-  [ -e "$pkg" ] || continue
-  if [ -L "$pkg" ]; then
-    echo "ERROR: symlinked dependency package: $pkg" >&2
-    exit 1
-  fi
-  [ -d "$pkg" ] || continue
-  lib="$pkg/.lake/build/lib/lean"
-  [ -e "$lib" ] || continue
-  if [ -L "$lib" ] || [ ! -d "$lib" ]; then
-    echo "ERROR: invalid dependency Lean output: $lib" >&2
-    exit 1
-  fi
-  dependency_lean_path="$dependency_lean_path:$lib"
-  dependency_libs="$((dependency_libs + 1))"
-done
-test "$dependency_libs" -gt 0
-
-dependency_report="$RUNNER_TEMP/cosmo-dependency-audit.txt"
-sudo -u cosmoaudit env -i \
-  HOME="$AUDIT_HOME" PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
-  LEAN_PATH="$dependency_lean_path" LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
-  LEAN_NUM_THREADS=1 \
-  bash -c 'cd "$1"; shift; exec "$@"' \
-  _ "$COSMO_AUDIT_WORKSPACE" \
-  "$PINNED_LEAN_HOME/bin/lean" --run CosmoTrustAudit.lean \
-  --dependency "$TOOLCHAIN_LIB" Mathlib | tee "$dependency_report"
-grep -Eq '^COSMO_DEPENDENCY_AUDIT_COMPLETE roots=1 declarations=[0-9]+ kernel_replay=verified dependency_axioms=0$' \
-  "$dependency_report"
-
+begin_group "Snapshot frozen dependency artifacts before project build"
+# This receipt is run-local immutability evidence, not a self-authenticating
+# provenance claim. Kernel replay of the exact dependency closure used by the
+# finished project happens later from the compiled module headers.
 python3 scripts/verify-lean-dependency-artifacts.py snapshot \
   --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
   --receipt "$DEPENDENCY_RECEIPT"
@@ -249,7 +220,7 @@ if ! sudo -u cosmobuild test -w "$COSMO_BUILD_WORKSPACE/.lake/build"; then
 fi
 end_group
 
-begin_group "Build current COSMO source against verified frozen dependencies"
+begin_group "Build current COSMO source against frozen dependencies"
 sudo -u cosmobuild env -i \
   HOME="$BUILD_HOME" PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
   LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
@@ -341,7 +312,7 @@ sudo chown root:root "$LEAN_PATH_FILE" "$TRUSTED_LEAN_PATH_FILE" "$ARTIFACTS_FIL
 sudo chmod 0444 "$LEAN_PATH_FILE" "$TRUSTED_LEAN_PATH_FILE" "$ARTIFACTS_FILE"
 end_group
 
-begin_group "Replay exact project artifacts and run semantic audit"
+begin_group "Replay exact dependency closure and project artifacts"
 lean_path="$(cat "$LEAN_PATH_FILE")"
 mapfile -t artifacts < "$ARTIFACTS_FILE"
 test "${#artifacts[@]}" -gt 0
@@ -353,7 +324,9 @@ sudo -u cosmoaudit env -i \
   bash -c 'cd "$1"; shift; exec "$@"' \
   _ "$COSMO_AUDIT_WORKSPACE" \
   "$PINNED_LEAN_HOME/bin/lean" --run CosmoTrustAudit.lean \
-  "${artifacts[@]}" | tee "$audit_report"
+  --project "$TOOLCHAIN_LIB" "${artifacts[@]}" | tee "$audit_report"
+grep -Eq '^COSMO_DEPENDENCY_AUDIT_COMPLETE roots=[0-9]+ declarations=[0-9]+ kernel_replay=verified dependency_axioms=0$' \
+  "$audit_report"
 grep -Eq '^COSMO_PROTECTED_AUDIT_COMPLETE modules=[0-9]+ declarations=[0-9]+ kernel_replay=verified project_initializers=not_executed$' \
   "$audit_report"
 end_group
