@@ -210,6 +210,16 @@ private unsafe def moduleNameForArtifact
       s!"project module {moduleName} is shadowed: expected {artifactReal}, resolved {resolvedReal}"
   return moduleName
 
+/-- Read the direct import names encoded in one frozen module artifact. -/
+private unsafe def directImportsForModule (moduleName : Name) : IO (Array Name) := do
+  let olean ← findOLean moduleName
+  let parts ← readModuleDataParts #[olean]
+  if h : parts.size = 0 then
+    throw <| IO.userError s!"failed to read import data for {moduleName}"
+  else
+    let (moduleData, _) := parts[0]
+    return moduleData.imports.map (·.module)
+
 private def runProtectedAudit
     (env : Environment) (modules : Array Name) : IO Unit :=
   Core.CoreM.toIO'
@@ -225,10 +235,9 @@ private def pathWithin (path root : System.FilePath) : Bool :=
   pathText == rootText || pathText.startsWith (rootText ++ "/")
 
 /--
-Validate the actual dependency environment materialized before any COSMO module
-is compiled.
+Validate the actual external dependency closure used by COSMO.
 
-The complete imported environment is replayed into a fresh kernel environment,
+The selected imported environment is replayed into a fresh kernel environment,
 matching `leanchecker --fresh` semantics and catching malformed unchecked
 proofs. Any axiom declaration whose defining module resolves outside the pinned
 Lean toolchain is rejected. Dependencies may use toolchain foundations, but may
@@ -237,7 +246,9 @@ not introduce their own axioms.
 private unsafe def verifyDependencyEnvironment
     (toolchainRootText : String) (roots : Array Name) : IO Unit := do
   if roots.isEmpty then
-    throw <| IO.userError "dependency verification requires at least one root module"
+    IO.println
+      "COSMO_DEPENDENCY_AUDIT_COMPLETE roots=0 declarations=0 kernel_replay=verified dependency_axioms=0"
+    return
   let toolchainRoot ← IO.FS.realPath ⟨toolchainRootText⟩
   let imports := roots.map fun moduleName =>
     { module := moduleName : Lean.Import }
@@ -274,16 +285,38 @@ private unsafe def verifyDependencyEnvironment
       s!"COSMO_DEPENDENCY_AUDIT_COMPLETE roots={roots.size} declarations={env.constants.toList.length} kernel_replay=verified dependency_axioms={importedAxiomCount}"
 
 /--
-Kernel-replay frozen project artifacts, then load and semantically audit their
-exact modules without executing imported project `initialize` actions.
+Derive the exact external dependency roots from the direct imports encoded in
+every captured project module. Toolchain imports and imports of other captured
+project modules are excluded. This means adding a new external import expands
+the verified dependency closure automatically rather than relying on a
+hand-maintained root list.
+-/
+private unsafe def externalDependencyRoots
+    (toolchainRootText : String) (projectModules : Array Name) : IO (Array Name) := do
+  let toolchainRoot ← IO.FS.realPath ⟨toolchainRootText⟩
+  let mut roots : Array Name := #[]
+  for projectModule in projectModules do
+    for importedModule in ← directImportsForModule projectModule do
+      if projectModules.contains importedModule then
+        continue
+      let importedFile ← findOLean importedModule
+      let importedReal ← IO.FS.realPath importedFile
+      if pathWithin importedReal toolchainRoot then
+        continue
+      unless roots.contains importedModule do
+        roots := roots.push importedModule
+  return roots
 
-Project mode CLI arguments are absolute `.olean` paths, not dotted module-name
-strings. This avoids lossy `String.toName` conversion for valid names such as
-`Foo.«Bar.Baz»` and binds each audited name back to the exact captured artifact.
+/--
+Protected project mode:
 
-Dependency mode is:
+`--project <pinned-toolchain-lib> <project-olean> [<project-olean> ...]`
 
-`--dependency <pinned-toolchain-lib> <root-module> [<root-module> ...]`
+The runner resolves exact project module identities, derives and kernel-replays
+their actual external dependency roots, then kernel-replays and semantically
+audits every captured project module without executing project initializers.
+
+A separate `--dependency` mode is retained for focused/manual checks.
 -/
 unsafe def _root_.main (args : List String) : IO Unit := do
   initSearchPath (← findSysroot)
@@ -291,15 +324,18 @@ unsafe def _root_.main (args : List String) : IO Unit := do
   | "--dependency" :: toolchainRoot :: rootTexts =>
       let roots := rootTexts.toArray.map String.toName
       verifyDependencyEnvironment toolchainRoot roots
-  | artifactTexts =>
+  | "--project" :: toolchainRoot :: artifactTexts =>
       if artifactTexts.isEmpty then
-        throw <| IO.userError "COSMO protected audit requires at least one .olean artifact."
+        throw <| IO.userError "COSMO protected project audit requires at least one .olean artifact."
       let searchPath ← searchPathRef.get
       let mut modules : Array Name := #[]
       for artifact in artifactTexts do
         let moduleName ← moduleNameForArtifact searchPath artifact
         unless modules.contains moduleName do
           modules := modules.push moduleName
+
+      let dependencyRoots ← externalDependencyRoots toolchainRoot modules
+      verifyDependencyEnvironment toolchainRoot dependencyRoots
 
       for moduleName in modules do
         replayModule moduleName
@@ -308,5 +344,8 @@ unsafe def _root_.main (args : List String) : IO Unit := do
         { module := moduleName : Lean.Import }
       Lean.withImportModules imports {} fun env =>
         runProtectedAudit env modules
+  | _ =>
+      throw <| IO.userError
+        "usage: CosmoTrustAudit --project <toolchain-lib> <project-olean>... | --dependency <toolchain-lib> <root-module>..."
 
 end CosmoTrust
