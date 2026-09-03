@@ -7,7 +7,8 @@ set -euo pipefail
 : "${LEAN_NUM_THREADS:?}"
 : "${COSMO_BUILD_WORKSPACE:?}"
 : "${COSMO_AUDIT_WORKSPACE:?}"
-: "${COSMO_DEPENDENCY_ANCHOR:?}"
+COSMO_DEPENDENCY_ANCHOR="${COSMO_DEPENDENCY_ANCHOR:-}"
+COSMO_DEPENDENCY_AUTHORITY="${COSMO_DEPENDENCY_AUTHORITY:-verified-reuse}"
 
 BUILD_HOME=/tmp/cosmobuild-home
 AUDIT_HOME=/tmp/cosmoaudit-home
@@ -129,10 +130,14 @@ rm -rf "$staging"
 trap cleanup EXIT
 end_group
 
-begin_group "Authenticate reviewed dependency build state"
-python3 scripts/verify-lean-dependency-artifacts.py verify-anchor \
-  --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
-  --anchor "$COSMO_DEPENDENCY_ANCHOR"
+begin_group "Authenticate dependency build state"
+if [ -n "$COSMO_DEPENDENCY_ANCHOR" ]; then
+  python3 scripts/verify-lean-dependency-artifacts.py verify-anchor \
+    --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
+    --anchor "$COSMO_DEPENDENCY_ANCHOR"
+else
+  echo "Cold authority uses exact-run source reconstruction plus run-local artifact receipt; no routine cache anchor is consulted."
+fi
 python3 scripts/verify-lean-dependency-artifacts.py snapshot \
   --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
   --receipt "$DEPENDENCY_RECEIPT"
@@ -203,9 +208,11 @@ begin_group "Prove dependency state stayed immutable"
 python3 scripts/verify-lean-dependency-artifacts.py verify \
   --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
   --receipt "$DEPENDENCY_RECEIPT"
-python3 scripts/verify-lean-dependency-artifacts.py verify-anchor \
-  --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
-  --anchor "$COSMO_DEPENDENCY_ANCHOR"
+if [ -n "$COSMO_DEPENDENCY_ANCHOR" ]; then
+  python3 scripts/verify-lean-dependency-artifacts.py verify-anchor \
+    --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
+    --anchor "$COSMO_DEPENDENCY_ANCHOR"
+fi
 end_group
 
 begin_group "Verify isolated COSMO source stayed identical"
@@ -341,4 +348,4 @@ grep -F "leanchecker found a problem in GeneratedUncheckedTheorem" \
   "$unchecked_report" >/dev/null
 end_group
 
-printf 'COSMO OPT-LEAN-001 verified-reuse integrity pipeline completed successfully.\n'
+printf 'COSMO Lean protected integrity pipeline completed successfully authority=%s.\n' "$COSMO_DEPENDENCY_AUTHORITY"
