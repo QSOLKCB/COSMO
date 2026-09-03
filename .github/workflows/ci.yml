@@ -23,6 +23,8 @@ env:
   LANG: C.UTF-8
   TZ: UTC
   PYTHONHASHSEED: "0"
+  COSMO_BUILD_WORKSPACE: /tmp/cosmo-build-workspace
+  COSMO_AUDIT_WORKSPACE: /tmp/cosmo-audit-workspace
 
 jobs:
   lean:
@@ -30,21 +32,29 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Checkout
+      - name: Checkout reviewed source
         uses: actions/checkout@v4
         with:
-          # COSMO's current integrity checks do not depend on Git history.
-          # Keep the checkout shallow unless a future provenance check requires
-          # the QEC-style fetch-depth: 0 contract explicitly.
           fetch-depth: 1
 
       - name: Install pinned Lean toolchain
         shell: bash
         run: |
+          set -euo pipefail
           curl --proto '=https' --tlsv1.2 -sSf \
             https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
             | sh -s -- -y --default-toolchain leanprover/lean4:v4.33.1
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+          # Force the distribution to be installed before privilege separation.
+          "$HOME/.elan/bin/lean" --version
+          "$HOME/.elan/bin/lake" --version
+          lean_bin="$("$HOME/.elan/bin/elan" which lean)"
+          lean_home="$(dirname "$(dirname "$lean_bin")")"
+          test -x "$lean_home/bin/lean"
+          test -x "$lean_home/bin/lake"
+          test -x "$lean_home/bin/leanchecker"
+          echo "PINNED_LEAN_HOME=$lean_home" >> "$GITHUB_ENV"
 
       # Port the bounded-parallelism policy used by QSOL-GEO-REASON. Hosted
       # runners vary in CPU count, so cap at four rather than oversubscribing.
@@ -59,78 +69,294 @@ jobs:
           echo "LEAN_NUM_THREADS=${workers}" >> "$GITHUB_ENV"
           echo "Lean will use ${workers} thread(s) on ${cpus} runner CPU(s)."
 
-      # The dependency declaration pins Mathlib by exact commit, so this cache
-      # identity changes whenever the Lean toolchain or dependency declaration
-      # changes. A compatible older key can still supply the same dependency
-      # graph when an unrelated Lake target setting changes.
+      - name: Materialize isolated build workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$COSMO_BUILD_WORKSPACE" "$COSMO_AUDIT_WORKSPACE"
+          mkdir -p "$COSMO_BUILD_WORKSPACE"
+          git archive --format=tar HEAD | tar -xf - -C "$COSMO_BUILD_WORKSPACE"
+
+      # Restore dependencies into the disposable build workspace, not into the
+      # reviewed checkout that contains the trust scanner and semantic auditor.
       - name: Restore Lean dependency/build cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            .lake/packages
-            lake-manifest.json
-          key: cosmo-lean-deps-v1-${{ runner.os }}-lean-4.33.1-${{ hashFiles('lean-toolchain', 'lakefile.lean') }}
+            /tmp/cosmo-build-workspace/.lake/packages
+            /tmp/cosmo-build-workspace/lake-manifest.json
+          key: cosmo-lean-deps-v2-${{ runner.os }}-lean-4.33.1-${{ hashFiles('lean-toolchain', 'lakefile.lean') }}
           restore-keys: |
-            cosmo-lean-deps-v1-${{ runner.os }}-lean-4.33.1-
+            cosmo-lean-deps-v2-${{ runner.os }}-lean-4.33.1-
 
-      - name: Reject admitted proofs, custom declarations, and native_decide lexically
+      - name: Reject forbidden Lean source constructs
         run: ./scripts/check-lean-trust.sh
 
-      - name: Build pinned Lake project
-        run: lake build
-
-      - name: Verify build did not mutate tracked trust inputs
-        run: git diff --exit-code HEAD --
-
-      - name: Replay package declarations through the Lean kernel
+      - name: Prepare isolated build and audit identities
         shell: bash
         run: |
           set -euo pipefail
-          build_dir=".lake/build/lib/lean"
-          modules=()
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin cosmobuild 2>/dev/null || true
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin cosmoaudit 2>/dev/null || true
+
+          sudo install -d -o cosmobuild -g cosmobuild -m 0700 /tmp/cosmobuild-home
+          sudo install -d -o cosmoaudit -g cosmoaudit -m 0700 /tmp/cosmoaudit-home
+          sudo install -d -o cosmoaudit -g cosmoaudit -m 0700 "$COSMO_AUDIT_WORKSPACE"
+          sudo chown -R cosmobuild:cosmobuild "$COSMO_BUILD_WORKSPACE"
+
+          # The build identity can write only its disposable workspace and home.
+          # It cannot replace the reviewed scanner, auditor, aggregate root, or
+          # package declaration used by later trust checks.
+          sudo chmod o+x \
+            /home/runner \
+            /home/runner/work \
+            "$RUNNER_TEMP" \
+            "$GITHUB_WORKSPACE/.." \
+            "$GITHUB_WORKSPACE"
+          if sudo -u cosmobuild test -w "$GITHUB_WORKSPACE"; then
+            echo "ERROR: isolated build identity can write the reviewed checkout."
+            exit 1
+          fi
+          for path in \
+            scripts/check-lean-trust.sh \
+            CosmoTrust.lean \
+            audit/AxiomAudit.lean \
+            COSMO.lean \
+            lakefile.lean \
+            lean-toolchain
+          do
+            if sudo -u cosmobuild test -w "$path"; then
+              echo "ERROR: isolated build identity can write reviewed trust input: $path"
+              exit 1
+            fi
+          done
+          sudo -u cosmobuild test -x "$PINNED_LEAN_HOME/bin/lean"
+          sudo -u cosmobuild test -x "$PINNED_LEAN_HOME/bin/lake"
+
+      - name: Build project under isolated identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u cosmobuild env -i \
+            HOME=/tmp/cosmobuild-home \
+            PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+            LC_ALL=C.UTF-8 \
+            LANG=C.UTF-8 \
+            TZ=UTC \
+            LEAN_NUM_THREADS="$LEAN_NUM_THREADS" \
+            bash -c 'cd "$1"; shift; exec "$@"' \
+            _ "$COSMO_BUILD_WORKSPACE" \
+            "$PINNED_LEAN_HOME/bin/lake" build
+
+      - name: Terminate build descendants
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo pkill -TERM -u cosmobuild 2>/dev/null || true
+          for _ in 1 2 3 4 5; do
+            if ! sudo pgrep -u cosmobuild >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          sudo pkill -KILL -u cosmobuild 2>/dev/null || true
+          if sudo pgrep -u cosmobuild >/dev/null 2>&1; then
+            echo "ERROR: isolated build process survived termination."
+            exit 1
+          fi
+
+      - name: Verify isolated build source stayed identical
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import os
+          import stat
+          import subprocess
+          from pathlib import Path
+
+          reviewed = Path(os.environ["GITHUB_WORKSPACE"])
+          built = Path(os.environ["COSMO_BUILD_WORKSPACE"])
+          tracked_raw = subprocess.check_output(
+              ["git", "ls-files", "-z"], cwd=reviewed
+          )
+          tracked = {
+              Path(os.fsdecode(item))
+              for item in tracked_raw.split(b"\0")
+              if item
+          }
+
+          def fingerprint(path: Path) -> tuple[str, str, int]:
+              info = path.lstat()
+              executable = info.st_mode & 0o111
+              if stat.S_ISLNK(info.st_mode):
+                  return ("symlink", os.readlink(path), executable)
+              if stat.S_ISREG(info.st_mode):
+                  digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                  return ("file", digest, executable)
+              return ("other", str(stat.S_IFMT(info.st_mode)), executable)
+
+          failures: list[str] = []
+          for relative in sorted(tracked, key=str):
+              source_path = reviewed / relative
+              built_path = built / relative
+              if not built_path.exists() and not built_path.is_symlink():
+                  failures.append(f"missing tracked path: {relative}")
+                  continue
+              if fingerprint(source_path) != fingerprint(built_path):
+                  failures.append(f"tracked path changed during build: {relative}")
+
+          actual: set[Path] = set()
+          for path in built.rglob("*"):
+              relative = path.relative_to(built)
+              if not relative.parts:
+                  continue
+              if relative.parts[0] == ".lake":
+                  continue
+              if relative == Path("lake-manifest.json"):
+                  continue
+              if path.is_file() or path.is_symlink():
+                  actual.add(relative)
+
+          extras = sorted(actual - tracked, key=str)
+          if extras:
+              failures.extend(f"unexpected build-created path: {path}" for path in extras)
+
+          if failures:
+              for failure in failures:
+                  print(f"ERROR: {failure}")
+              raise SystemExit(1)
+
+          print(
+              f"Isolated source verification passed for {len(tracked)} tracked path(s)."
+          )
+          PY
+
+      - name: Freeze project outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo chown -R root:root "$COSMO_BUILD_WORKSPACE"
+          sudo chmod -R a+rX "$COSMO_BUILD_WORKSPACE"
+          sudo chmod -R a-w "$COSMO_BUILD_WORKSPACE"
+          if sudo -u cosmoaudit test -w "$COSMO_BUILD_WORKSPACE/lakefile.lean"; then
+            echo "ERROR: audit identity can write the frozen project declaration."
+            exit 1
+          fi
+          sudo -u cosmoaudit test -r "$COSMO_BUILD_WORKSPACE/lakefile.lean"
+
+      - name: Capture every built project module
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_dir="$COSMO_BUILD_WORKSPACE/.lake/build/lib/lean"
+          modules_file="$RUNNER_TEMP/cosmo-built-modules.txt"
+          : > "$modules_file"
           while IFS= read -r -d '' olean; do
             module="${olean#"$build_dir/"}"
             module="${module%.olean}"
-            modules+=("${module//\//.}")
+            printf '%s\n' "${module//\//.}" >> "$modules_file"
           done < <(find "$build_dir" -type f -name '*.olean' -print0 | sort -z)
-          if [ "${#modules[@]}" -eq 0 ]; then
-            echo "ERROR: no project modules found for kernel replay."
+          sort -u -o "$modules_file" "$modules_file"
+          if [ ! -s "$modules_file" ]; then
+            echo "ERROR: no project modules found after Lake build."
             exit 1
           fi
-          lake env leanchecker "${modules[@]}"
+          echo "Built COSMO modules:"
+          cat "$modules_file"
 
-      - name: Compile clean semantic auditor
+      - name: Replay all built modules through the Lean kernel
         shell: bash
         run: |
           set -euo pipefail
-          audit_dir="$RUNNER_TEMP/cosmo-trust-audit"
-          rm -rf "$audit_dir"
-          mkdir -p "$audit_dir"
-          sed 's/namespace CosmoTrust/namespace CosmoTrustCI/; s/end CosmoTrust/end CosmoTrustCI/' \
-            CosmoTrust.lean > "$audit_dir/CosmoTrustCI.lean"
+          mapfile -t modules < "$RUNNER_TEMP/cosmo-built-modules.txt"
+          sudo -u cosmoaudit env -i \
+            HOME=/tmp/cosmoaudit-home \
+            PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+            LC_ALL=C.UTF-8 \
+            LANG=C.UTF-8 \
+            TZ=UTC \
+            LEAN_NUM_THREADS=1 \
+            MATHLIB_NO_CACHE_ON_UPDATE=1 \
+            bash -c 'cd "$1"; shift; exec "$@"' \
+            _ "$COSMO_BUILD_WORKSPACE" \
+            "$PINNED_LEAN_HOME/bin/lake" env \
+            "$PINNED_LEAN_HOME/bin/leanchecker" "${modules[@]}"
+
+      - name: Compile reviewed semantic auditor
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging="$(mktemp -d)"
+          trap 'rm -rf "$staging"' EXIT
+
+          sed \
+            's/namespace CosmoTrust/namespace CosmoTrustCI/; s/end CosmoTrust/end CosmoTrustCI/' \
+            CosmoTrust.lean > "$staging/CosmoTrustCI.lean"
+
           {
             echo 'import CosmoTrustCI'
-            sed 's/CosmoTrust\./CosmoTrustCI./g' audit/AxiomAudit.lean
-          } > "$audit_dir/AxiomAuditCI.lean"
-          lake env lean -o .lake/build/lib/lean/CosmoTrustCI.olean \
-            "$audit_dir/CosmoTrustCI.lean"
+            while IFS= read -r module; do
+              printf 'import %s\n' "$module"
+            done < "$RUNNER_TEMP/cosmo-built-modules.txt"
+            anchor="$(head -n 1 "$RUNNER_TEMP/cosmo-built-modules.txt")"
+            printf '\nrun_cmd CosmoTrustCI.auditImportedPackageFrom `%s\n' "$anchor"
+          } > "$staging/AxiomAuditCI.lean"
+
+          sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
+            "$staging/CosmoTrustCI.lean" \
+            "$COSMO_AUDIT_WORKSPACE/CosmoTrustCI.lean"
+          sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
+            "$staging/AxiomAuditCI.lean" \
+            "$COSMO_AUDIT_WORKSPACE/AxiomAuditCI.lean"
+
+          sudo -u cosmoaudit env -i \
+            HOME=/tmp/cosmoaudit-home \
+            PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+            LC_ALL=C.UTF-8 \
+            LANG=C.UTF-8 \
+            TZ=UTC \
+            LEAN_NUM_THREADS=1 \
+            MATHLIB_NO_CACHE_ON_UPDATE=1 \
+            bash -c 'cd "$1"; shift; exec "$@"' \
+            _ "$COSMO_BUILD_WORKSPACE" \
+            "$PINNED_LEAN_HOME/bin/lake" env \
+            "$PINNED_LEAN_HOME/bin/lean" \
+            -o "$COSMO_AUDIT_WORKSPACE/CosmoTrustCI.olean" \
+            "$COSMO_AUDIT_WORKSPACE/CosmoTrustCI.lean"
 
       - name: Audit every COSMO declaration semantically
         shell: bash
         run: |
-          lake env lean "$RUNNER_TEMP/cosmo-trust-audit/AxiomAuditCI.lean" \
+          set -euo pipefail
+          sudo -u cosmoaudit env -i \
+            HOME=/tmp/cosmoaudit-home \
+            PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+            LC_ALL=C.UTF-8 \
+            LANG=C.UTF-8 \
+            TZ=UTC \
+            LEAN_NUM_THREADS=1 \
+            MATHLIB_NO_CACHE_ON_UPDATE=1 \
+            bash -c 'cd "$1"; shift; exec "$@"' \
+            _ "$COSMO_BUILD_WORKSPACE" \
+            "$PINNED_LEAN_HOME/bin/lake" env \
+            bash -c \
+            'audit_dir="$1"; lean_bin="$2"; export LEAN_PATH="$audit_dir:$LEAN_PATH"; exec "$lean_bin" "$audit_dir/AxiomAuditCI.lean"' \
+            _ "$COSMO_AUDIT_WORKSPACE" "$PINNED_LEAN_HOME/bin/lean" \
             | tee axiom-report.txt
 
       - name: Regression-test generated axiom rejection
         shell: bash
         run: |
           set -euo pipefail
-          temporary="$(mktemp -d)"
-          fixture="$temporary/GeneratedAxiomFixture.lean"
-          report="$temporary/generated-axiom-report.txt"
-          trap 'rm -rf "$temporary"' EXIT
+          staging="$(mktemp)"
+          report="$RUNNER_TEMP/generated-axiom-report.txt"
+          trap 'rm -f "$staging"' EXIT
 
-          cat > "$fixture" <<'LEAN'
+          cat > "$staging" <<'LEAN'
           import CosmoTrustCI
 
           open Lean Elab Command
@@ -149,7 +375,25 @@ jobs:
               #[`CosmoTrustFixture.generatedBogus]
           LEAN
 
-          if lake env lean "$fixture" >"$report" 2>&1; then
+          sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
+            "$staging" "$COSMO_AUDIT_WORKSPACE/GeneratedAxiomFixture.lean"
+
+          if sudo -u cosmoaudit env -i \
+            HOME=/tmp/cosmoaudit-home \
+            PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+            LC_ALL=C.UTF-8 \
+            LANG=C.UTF-8 \
+            TZ=UTC \
+            LEAN_NUM_THREADS=1 \
+            MATHLIB_NO_CACHE_ON_UPDATE=1 \
+            bash -c 'cd "$1"; shift; exec "$@"' \
+            _ "$COSMO_BUILD_WORKSPACE" \
+            "$PINNED_LEAN_HOME/bin/lake" env \
+            bash -c \
+            'audit_dir="$1"; lean_bin="$2"; export LEAN_PATH="$audit_dir:$LEAN_PATH"; exec "$lean_bin" "$audit_dir/GeneratedAxiomFixture.lean"' \
+            _ "$COSMO_AUDIT_WORKSPACE" "$PINNED_LEAN_HOME/bin/lean" \
+            >"$report" 2>&1
+          then
             cat "$report"
             echo "ERROR: semantic trust audit accepted a generated axiom declaration."
             exit 1
@@ -162,13 +406,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          temporary="$(mktemp -d)"
-          fixture="$temporary/GeneratedUncheckedTheorem.lean"
-          olean=".lake/build/lib/lean/GeneratedUncheckedTheorem.olean"
-          report="$temporary/unchecked-theorem-report.txt"
-          trap 'rm -rf "$temporary"; rm -f "$olean"' EXIT
+          staging="$(mktemp)"
+          report="$RUNNER_TEMP/unchecked-theorem-report.txt"
+          trap 'rm -f "$staging"' EXIT
 
-          cat > "$fixture" <<'LEAN'
+          cat > "$staging" <<'LEAN'
           import Lean.Elab.Command
 
           open Lean Elab Command
@@ -183,8 +425,40 @@ jobs:
             }
           LEAN
 
-          lake env lean -o "$olean" "$fixture"
-          if lake env leanchecker GeneratedUncheckedTheorem >"$report" 2>&1; then
+          sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
+            "$staging" "$COSMO_AUDIT_WORKSPACE/GeneratedUncheckedTheorem.lean"
+
+          sudo -u cosmoaudit env -i \
+            HOME=/tmp/cosmoaudit-home \
+            PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+            LC_ALL=C.UTF-8 \
+            LANG=C.UTF-8 \
+            TZ=UTC \
+            LEAN_NUM_THREADS=1 \
+            MATHLIB_NO_CACHE_ON_UPDATE=1 \
+            bash -c 'cd "$1"; shift; exec "$@"' \
+            _ "$COSMO_BUILD_WORKSPACE" \
+            "$PINNED_LEAN_HOME/bin/lake" env \
+            bash -c \
+            'audit_dir="$1"; lean_bin="$2"; export LEAN_PATH="$audit_dir:$LEAN_PATH"; exec "$lean_bin" -o "$audit_dir/GeneratedUncheckedTheorem.olean" "$audit_dir/GeneratedUncheckedTheorem.lean"' \
+            _ "$COSMO_AUDIT_WORKSPACE" "$PINNED_LEAN_HOME/bin/lean"
+
+          if sudo -u cosmoaudit env -i \
+            HOME=/tmp/cosmoaudit-home \
+            PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+            LC_ALL=C.UTF-8 \
+            LANG=C.UTF-8 \
+            TZ=UTC \
+            LEAN_NUM_THREADS=1 \
+            MATHLIB_NO_CACHE_ON_UPDATE=1 \
+            bash -c 'cd "$1"; shift; exec "$@"' \
+            _ "$COSMO_BUILD_WORKSPACE" \
+            "$PINNED_LEAN_HOME/bin/lake" env \
+            bash -c \
+            'audit_dir="$1"; checker="$2"; export LEAN_PATH="$audit_dir:$LEAN_PATH"; exec "$checker" GeneratedUncheckedTheorem' \
+            _ "$COSMO_AUDIT_WORKSPACE" "$PINNED_LEAN_HOME/bin/leanchecker" \
+            >"$report" 2>&1
+          then
             cat "$report"
             echo "ERROR: kernel replay accepted an unchecked malformed theorem."
             exit 1
@@ -193,6 +467,13 @@ jobs:
           cat "$report"
           grep -F "leanchecker found a problem in GeneratedUncheckedTheorem" \
             "$report" >/dev/null
+
+      - name: Terminate audit descendants
+        if: always()
+        shell: bash
+        run: |
+          sudo pkill -TERM -u cosmoaudit 2>/dev/null || true
+          sudo pkill -KILL -u cosmoaudit 2>/dev/null || true
 
   python:
     name: Python deterministic core
