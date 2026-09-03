@@ -12,6 +12,7 @@ BUILD_HOME=/tmp/cosmobuild-home
 AUDIT_HOME=/tmp/cosmoaudit-home
 LEAN_PATH_FILE="$RUNNER_TEMP/cosmo-lean-path.txt"
 MODULES_FILE="$RUNNER_TEMP/cosmo-project-modules.txt"
+MANIFEST_SNAPSHOT="$RUNNER_TEMP/cosmo-prebuild-lake-manifest.json"
 
 begin_group() {
   printf '::group::%s\n' "$1"
@@ -85,6 +86,40 @@ sudo -u cosmobuild test -x "$PINNED_LEAN_HOME/bin/lean"
 sudo -u cosmobuild test -x "$PINNED_LEAN_HOME/bin/lake"
 end_group
 
+begin_group "Freeze Lake manifest before project compilation"
+manifest_path="$COSMO_BUILD_WORKSPACE/lake-manifest.json"
+
+# On a cold cache, materialize dependency resolution before any project module
+# is compiled. `lake update` elaborates the reviewed Lake configuration and
+# resolves dependencies, but it does not build the COSMO Lean roots. The
+# resulting manifest is then copied outside the build-owned workspace and made
+# immutable before `lake build` can execute project compile-time code.
+if [ ! -f "$manifest_path" ]; then
+  sudo -u cosmobuild env -i \
+    HOME="$BUILD_HOME" \
+    PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    TZ=UTC \
+    LEAN_NUM_THREADS="$LEAN_NUM_THREADS" \
+    bash -c 'cd "$1"; shift; exec "$@"' \
+    _ "$COSMO_BUILD_WORKSPACE" \
+    "$PINNED_LEAN_HOME/bin/lake" update
+fi
+
+if [ ! -f "$manifest_path" ] || [ -L "$manifest_path" ]; then
+  echo "ERROR: pre-build Lake manifest is missing, non-regular, or symlinked." >&2
+  exit 1
+fi
+sudo install -o root -g root -m 0444 "$manifest_path" "$MANIFEST_SNAPSHOT"
+manifest_snapshot_sha="$(sha256sum "$MANIFEST_SNAPSHOT" | awk '{print $1}')"
+echo "Frozen pre-build Lake manifest sha256=$manifest_snapshot_sha"
+if sudo -u cosmobuild test -w "$MANIFEST_SNAPSHOT"; then
+  echo "ERROR: build identity can modify the frozen Lake manifest snapshot." >&2
+  exit 1
+fi
+end_group
+
 begin_group "Build project under isolated identity"
 sudo -u cosmobuild env -i \
   HOME="$BUILD_HOME" \
@@ -100,6 +135,23 @@ end_group
 
 begin_group "Terminate build descendants"
 terminate_identity cosmobuild
+end_group
+
+begin_group "Verify Lake manifest stayed identical to pre-build trust snapshot"
+manifest_path="$COSMO_BUILD_WORKSPACE/lake-manifest.json"
+if [ ! -f "$manifest_path" ] || [ -L "$manifest_path" ]; then
+  echo "ERROR: build replaced, removed, or symlinked lake-manifest.json." >&2
+  exit 1
+fi
+if ! cmp -s "$MANIFEST_SNAPSHOT" "$manifest_path"; then
+  snapshot_sha="$(sha256sum "$MANIFEST_SNAPSHOT" | awk '{print $1}')"
+  live_sha="$(sha256sum "$manifest_path" | awk '{print $1}')"
+  echo "ERROR: lake-manifest.json changed after the pre-build trust snapshot." >&2
+  echo "       snapshot sha256=$snapshot_sha" >&2
+  echo "       post-build sha256=$live_sha" >&2
+  exit 1
+fi
+echo "Lake manifest remained byte-identical to the immutable pre-build snapshot."
 end_group
 
 begin_group "Verify isolated build source stayed identical"
@@ -190,6 +242,10 @@ fi
 end_group
 
 begin_group "Derive frozen import path and complete project module set"
+# `lake-manifest.json` is safe to consume here only because the byte-for-byte
+# comparison above proved it still matches the immutable snapshot captured
+# before project compilation. Local-path-package trust therefore cannot be
+# downgraded by compile-time code rewriting the build-owned manifest.
 python3 scripts/prepare-lean-audit.py \
   --workspace "$COSMO_BUILD_WORKSPACE" \
   --manifest "$COSMO_BUILD_WORKSPACE/lake-manifest.json" \
