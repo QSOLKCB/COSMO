@@ -290,8 +290,12 @@ jobs:
           done
           sudo rmdir "$nested"
 
+          # Stage generated proof artifacts outside the source trees while the
+          # exact dependency sources are re-verified. The vault is root-owned;
+          # it becomes read/traverse-only after staging so the runner can
+          # enumerate it without granting either build identity write access.
           sudo rm -rf "$COLD_ARTIFACTS"
-          sudo install -d -o root -g root -m 0700 "$COLD_ARTIFACTS"
+          sudo install -d -o root -g root -m 0755 "$COLD_ARTIFACTS"
           for pkg in "$packages"/*; do
             [ -d "$pkg" ] || continue
             name="$(basename "$pkg")"
@@ -300,6 +304,15 @@ jobs:
             fi
             sudo rm -rf "$pkg/.lake"
           done
+          sudo chmod 0555 "$COLD_ARTIFACTS"
+          if sudo -u cosmodepbuild test -w "$COLD_ARTIFACTS"; then
+            echo "dependency-build identity can write frozen cold artifact vault" >&2
+            exit 1
+          fi
+          if sudo -u cosmoresolve test -w "$COLD_ARTIFACTS"; then
+            echo "resolver identity can write frozen cold artifact vault" >&2
+            exit 1
+          fi
 
           # With generated Lake state staged outside the source tree, require
           # the exact dependency source graph to verify again after the build.
