@@ -1,5 +1,4 @@
-import CosmoTrust
-import cosmovirus
+import COSMO
 
 /-
 Audit every declaration emitted by the COSMO Lake package, including private,

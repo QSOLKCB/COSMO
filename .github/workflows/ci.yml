@@ -73,15 +73,53 @@ jobs:
           restore-keys: |
             cosmo-lean-deps-v1-${{ runner.os }}-lean-4.33.1-
 
-      - name: Build pinned Lake project
-        run: lake build
-
       - name: Reject admitted proofs, custom declarations, and native_decide lexically
         run: ./scripts/check-lean-trust.sh
 
+      - name: Build pinned Lake project
+        run: lake build
+
+      - name: Verify build did not mutate tracked trust inputs
+        run: git diff --exit-code HEAD --
+
+      - name: Replay package declarations through the Lean kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_dir=".lake/build/lib/lean"
+          modules=()
+          while IFS= read -r -d '' olean; do
+            module="${olean#"$build_dir/"}"
+            module="${module%.olean}"
+            modules+=("${module//\//.}")
+          done < <(find "$build_dir" -type f -name '*.olean' -print0 | sort -z)
+          if [ "${#modules[@]}" -eq 0 ]; then
+            echo "ERROR: no project modules found for kernel replay."
+            exit 1
+          fi
+          lake env leanchecker "${modules[@]}"
+
+      - name: Compile clean semantic auditor
+        shell: bash
+        run: |
+          set -euo pipefail
+          audit_dir="$RUNNER_TEMP/cosmo-trust-audit"
+          rm -rf "$audit_dir"
+          mkdir -p "$audit_dir"
+          sed 's/namespace CosmoTrust/namespace CosmoTrustCI/; s/end CosmoTrust/end CosmoTrustCI/' \
+            CosmoTrust.lean > "$audit_dir/CosmoTrustCI.lean"
+          {
+            echo 'import CosmoTrustCI'
+            sed 's/CosmoTrust\./CosmoTrustCI./g' audit/AxiomAudit.lean
+          } > "$audit_dir/AxiomAuditCI.lean"
+          lake env lean -o .lake/build/lib/lean/CosmoTrustCI.olean \
+            "$audit_dir/CosmoTrustCI.lean"
+
       - name: Audit every COSMO declaration semantically
         shell: bash
-        run: lake env lean audit/AxiomAudit.lean | tee axiom-report.txt
+        run: |
+          lake env lean "$RUNNER_TEMP/cosmo-trust-audit/AxiomAuditCI.lean" \
+            | tee axiom-report.txt
 
       - name: Regression-test generated axiom rejection
         shell: bash
@@ -93,7 +131,7 @@ jobs:
           trap 'rm -rf "$temporary"' EXIT
 
           cat > "$fixture" <<'LEAN'
-          import CosmoTrust
+          import CosmoTrustCI
 
           open Lean Elab Command
 
@@ -106,7 +144,7 @@ jobs:
             }
 
           run_cmd do
-            CosmoTrust.auditNamedDeclarations
+            CosmoTrustCI.auditNamedDeclarations
               "generated declaration regression fixture"
               #[`CosmoTrustFixture.generatedBogus]
           LEAN
@@ -119,6 +157,42 @@ jobs:
 
           cat "$report"
           grep -F "project-generated axiom declaration" "$report" >/dev/null
+
+      - name: Regression-test unchecked theorem rejection
+        shell: bash
+        run: |
+          set -euo pipefail
+          temporary="$(mktemp -d)"
+          fixture="$temporary/GeneratedUncheckedTheorem.lean"
+          olean=".lake/build/lib/lean/GeneratedUncheckedTheorem.olean"
+          report="$temporary/unchecked-theorem-report.txt"
+          trap 'rm -rf "$temporary"; rm -f "$olean"' EXIT
+
+          cat > "$fixture" <<'LEAN'
+          import Lean.Elab.Command
+
+          open Lean Elab Command
+
+          set_option debug.skipKernelTC true in
+          run_cmd do
+            liftCoreM <| addDecl (forceExpose := true) <| Declaration.thmDecl {
+              name := `GeneratedUncheckedTheorem.bogus
+              levelParams := []
+              type := mkConst ``False
+              value := mkConst ``True.intro
+            }
+          LEAN
+
+          lake env lean -o "$olean" "$fixture"
+          if lake env leanchecker GeneratedUncheckedTheorem >"$report" 2>&1; then
+            cat "$report"
+            echo "ERROR: kernel replay accepted an unchecked malformed theorem."
+            exit 1
+          fi
+
+          cat "$report"
+          grep -F "leanchecker found a problem in GeneratedUncheckedTheorem" \
+            "$report" >/dev/null
 
   python:
     name: Python deterministic core

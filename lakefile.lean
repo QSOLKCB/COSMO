@@ -15,6 +15,6 @@ require mathlib from git
 
 @[default_target]
 lean_lib «cosmovirus» where
-  -- Build the semantic environment auditor alongside the formal core so CI can
-  -- test the exact code that checks generated declarations after elaboration.
-  roots := #[`cosmovirus, `CosmoTrust]
+  -- Keep one package root so importing `COSMO` loads every built declaration
+  -- into the semantic audit environment.
+  roots := #[`COSMO]

@@ -24,15 +24,15 @@ lake build
 lake env lean audit/AxiomAudit.lean
 ```
 
-The trusted core rejects project-authored `sorry`, `admit`, direct `sorryAx`, custom `axiom` or `constant` declarations, all project `opaque` declarations, `native_decide`, and direct `Lean.ofReduceBool` trust. Arithmetic decision proofs should use kernel reduction (`decide`) or another proof-producing tactic.
+The trusted core rejects project-authored `sorry`, `admit`, direct `sorryAx`, custom `axiom` or `constant` declarations, all project `opaque` declarations, `native_decide`, direct `Lean.ofReduceBool` trust, and direct kernel-check bypasses such as `debug.skipKernelTC` or `addDeclWithoutChecking`. Arithmetic decision proofs should use kernel reduction (`decide`) or another proof-producing tactic.
 
 `lake build` runs the COSMO package with Lean's `warningAsError` option enabled. This is a compiler-level backstop: if Lean parses a synthetic-sorry warning from any executable syntax, including context-sensitive interpolation forms, the build fails even if that syntax is outside the lightweight lexical scanner's model.
 
 The source preflight separately treats executable identifier-bang interpolation expressions as code (covering built-ins such as `s!`, `m!`, `f!`, `v!` and project macros with the same lexical shape), recognizes Lean identifier suffixes such as `'`, `?`, and `!`, masks ordinary and raw string literals correctly, preserves dangerous quoted trusted-base names for inspection, and scans `.lean` symlinks as source modules.
 
-Source scanning is not the final trust decision. `CosmoTrust.lean` examines Lean's elaborated environment after compilation, discovers every declaration emitted by the COSMO Lake package, rejects forbidden declaration kinds, and checks the transitive dependencies of every declaration against the reviewed foundation allow-list `propext`, `Classical.choice`, and `Quot.sound`. This includes private, auxiliary, macro-generated, and command-elaborator-generated declarations, so adding a theorem to a maintained audit list is no longer required.
+Source scanning is not the final trust decision. CI replays every built project module with the pinned toolchain's `leanchecker`. `CosmoTrust.lean` then examines Lean's elaborated environment after compilation, discovers every declaration emitted by the COSMO Lake package, rejects forbidden declaration kinds, and checks the transitive dependencies of every declaration against the reviewed foundation allow-list `propext`, `Classical.choice`, and `Quot.sound`. The package has one `COSMO.lean` root so the audit imports every built module. This includes private, auxiliary, macro-generated, and command-elaborator-generated declarations, so adding a theorem to a maintained audit list is no longer required.
 
-CI also builds an intentional `Declaration.axiomDecl` fixture and requires the semantic audit to fail. Changes to macros, elaborators, package roots, or the trust audit must preserve that negative regression test.
+CI also builds intentional generated-axiom and unchecked-malformed-theorem fixtures, then requires the semantic audit and kernel replay to reject them. Changes to macros, elaborators, package roots, or the trust audit must preserve those negative regression tests.
 
 The current baseline intentionally forbids `opaque` declarations altogether. If a future formalization genuinely needs an opaque definition, propose a reviewed trust-policy change together with semantic audit coverage.
 

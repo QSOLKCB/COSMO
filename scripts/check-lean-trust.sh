@@ -22,12 +22,19 @@ FORBIDDEN: dict[str, str] = {
     "opaque": "opaque declaration forbidden by the trusted core",
     "native_decide": "native_decide / Lean.ofReduceBool trust",
     "ofReduceBool": "direct Lean.ofReduceBool trust",
+    "skipKernelTC": "disabled kernel type checking",
+    "addDeclWithoutChecking": "unchecked declaration insertion",
 }
 
 # Quoted identifiers are normally ordinary identifiers even when their contents
 # spell a Lean keyword (for example `«sorry»`). These two names are different:
 # quoted spelling can resolve directly to the same trusted-base escape hatches.
-FORBIDDEN_QUOTED = {"sorryAx", "ofReduceBool"}
+FORBIDDEN_QUOTED = {
+    "sorryAx",
+    "ofReduceBool",
+    "skipKernelTC",
+    "addDeclWithoutChecking",
+}
 
 
 def is_identifier_start(char: str) -> bool:
@@ -136,6 +143,28 @@ def mask_noncode(source: str) -> str:
             return n
         return end + len(terminator)
 
+    def char_literal_end(index: int) -> int | None:
+        """Return the first index after a Lean character literal."""
+
+        if source[index] != "'":
+            return None
+        if index > 0 and is_identifier_continue(source[index - 1]):
+            return None
+
+        cursor = index + 1
+        if cursor >= n or source[cursor] == "\n":
+            return None
+        if source[cursor] == "\\":
+            cursor += 1
+            while cursor < n and source[cursor] not in {"'", "\n"}:
+                cursor += 1
+        else:
+            cursor += 1
+
+        if cursor < n and source[cursor] == "'":
+            return cursor + 1
+        return None
+
     def mask_quoted_identifier(index: int) -> int:
         # Lean quoted identifiers such as «sorry» are identifiers, not keywords.
         # Preserve only the two quoted names that can directly spell trusted-base
@@ -199,6 +228,11 @@ def mask_noncode(source: str) -> str:
                 continue
             if source.startswith("/-", index):
                 index = mask_block_comment(index)
+                continue
+
+            char_end = char_literal_end(index)
+            if char_end is not None:
+                index = char_end
                 continue
 
             raw_end = raw_string_end(index)
@@ -279,6 +313,10 @@ assert violations_in("theorem trustBypass : False := Lean.sorryAx False true\n")
 assert violations_in("theorem trustBypass : False := Lean.«sorryAx» False true\n")
 assert violations_in("theorem trustBypass : True := Lean.ofReduceBool True rfl\n")
 assert violations_in("theorem trustBypass : True := Lean.«ofReduceBool» True rfl\n")
+assert violations_in("set_option debug.skipKernelTC true\n")
+assert violations_in("set_option debug.«skipKernelTC» true\n")
+assert violations_in("run_cmd Lean.addDeclWithoutChecking env decl\n")
+assert violations_in("run_cmd Lean.«addDeclWithoutChecking» env decl\n")
 assert not violations_in("def native_decide' : Nat := 0\n")
 assert not violations_in("def sorry' : Nat := 0\n")
 assert not violations_in("def native_decide? : Nat := 0\n")
@@ -290,6 +328,15 @@ assert not violations_in('def note := r#"literal \\"sorry\\" and axiom opaque te
 assert not violations_in('def note := r##"literal "sorry" # axiom opaque sorry"##\n')
 assert not violations_in('def note := s!"literal sorry, but {1 + 1} is code"\n')
 assert not violations_in('def note := m!"literal sorry, but {1 + 1} is code"\n')
+assert not violations_in(
+    'def note : String := s!"{(show Char from \'{\')} literal sorry"\n'
+)
+assert not violations_in(
+    'def note : String := s!"{(show Char from \'}\')} literal sorry"\n'
+)
+assert violations_in(
+    'def hidden : String := s!"{(show Char from \'{\')} {(sorry : Nat)}"\n'
+)
 assert not violations_in("def «sorry» : Nat := 0\n")
 assert not violations_in("def «axiom» : Nat := 0\n")
 
@@ -328,6 +375,7 @@ if violations:
 
 print(
     "Lean trust gate passed: no admitted proofs, custom axioms/constants/opaque "
-    "declarations, native-evaluator trust, or reviewed scanner bypasses."
+    "declarations, native-evaluator trust, kernel-check bypasses, or reviewed "
+    "scanner bypasses."
 )
 PY
