@@ -111,8 +111,25 @@ def _standard_output(root: Path) -> Path:
 
 
 def _is_lake_config_olean(path: Path) -> bool:
+    """Recognize only Lake's configuration compiler output.
+
+    Older Lake layouts use `.lake/lakefile.olean`; Lake 5 uses versioned paths
+    such as `.lake/config/1/lakefile.olean`. These files are produced during the
+    pre-project `lake update`, then frozen root-owned/read-only before COSMO is
+    compiled. No other `.olean` outside inventoried library outputs is exempt.
+    """
+    if path.name != "lakefile.olean":
+        return False
     parts = path.parts
-    return len(parts) >= 2 and parts[-2:] == (".lake", "lakefile.olean")
+    for index, part in enumerate(parts[:-1]):
+        if part != ".lake":
+            continue
+        tail = parts[index + 1 : -1]
+        if not tail:
+            return True
+        if tail[0] == "config" and len(tail) >= 2:
+            return True
+    return False
 
 
 def _contains(path: Path, root: Path) -> bool:
@@ -245,7 +262,10 @@ def self_test() -> None:
         quoted.parent.mkdir(parents=True)
         quoted.write_bytes(b"quoted")
         (external_output / "External.olean").write_bytes(b"external")
-        (workspace / ".lake" / "lakefile.olean").write_bytes(b"config")
+        (workspace / ".lake" / "lakefile.olean").write_bytes(b"legacy-config")
+        versioned_config = workspace / ".lake" / "config" / "1" / "lakefile.olean"
+        versioned_config.parent.mkdir(parents=True)
+        versioned_config.write_bytes(b"versioned-config")
         manifest = workspace / "lake-manifest.json"
         manifest.write_text(
             json.dumps(
@@ -288,6 +308,16 @@ def self_test() -> None:
         else:
             raise AssertionError("custom hidden Lean output was accepted")
         custom.unlink()
+
+        fake_config = workspace / ".lake" / "config" / "1" / "Escape.olean"
+        fake_config.write_bytes(b"escape")
+        try:
+            analyze(workspace, manifest, toolchain_lib)
+        except AuditLayoutError as error:
+            assert "outside inventoried" in str(error)
+        else:
+            raise AssertionError("non-lakefile .olean in config tree was accepted")
+        fake_config.unlink()
 
         manifest.write_text(
             json.dumps(
