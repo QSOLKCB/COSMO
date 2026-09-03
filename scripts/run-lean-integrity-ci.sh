@@ -201,6 +201,10 @@ begin_group "Expose only project build output to compilation identity"
 sudo rm -rf "$COSMO_BUILD_WORKSPACE/.lake/build"
 sudo install -d -o cosmobuild -g cosmobuild -m 0700 \
   "$COSMO_BUILD_WORKSPACE/.lake/build"
+sudo install -d -o cosmobuild -g cosmobuild -m 0700 \
+  "$COSMO_BUILD_WORKSPACE/.lake/build/lib"
+sudo install -d -o cosmobuild -g cosmobuild -m 0700 \
+  "$COSMO_BUILD_WORKSPACE/.lake/build/lib/lean"
 
 if sudo -u cosmobuild test -w "$COSMO_BUILD_WORKSPACE"; then
   echo "ERROR: build identity can write frozen workspace root." >&2
@@ -214,19 +218,63 @@ if sudo -u cosmobuild test -w "$COSMO_BUILD_WORKSPACE/.lake/packages"; then
   echo "ERROR: build identity can write frozen dependency tree." >&2
   exit 1
 fi
-if ! sudo -u cosmobuild test -w "$COSMO_BUILD_WORKSPACE/.lake/build"; then
+if ! sudo -u cosmobuild test -w "$COSMO_BUILD_WORKSPACE/.lake/build/lib/lean"; then
   echo "ERROR: build identity cannot write isolated project output." >&2
   exit 1
 fi
 end_group
 
-begin_group "Build current COSMO source against frozen dependencies"
-sudo -u cosmobuild env -i \
-  HOME="$BUILD_HOME" PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
-  LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
-  LEAN_NUM_THREADS="$LEAN_NUM_THREADS" \
-  bash -c 'cd "$1"; shift; exec "$@"' \
-  _ "$COSMO_BUILD_WORKSPACE" "$PINNED_LEAN_HOME/bin/lake" build
+begin_group "Compile current COSMO modules directly against frozen dependencies"
+# Do not invoke Lake after the dependency tree is frozen. Lake writes replay
+# and hash bookkeeping into dependency package build directories even when the
+# proof objects themselves are already present. Direct pinned-Lean compilation
+# keeps the entire dependency tree immutable while giving the project identity
+# write access only to COSMO's isolated output directory.
+dependency_lean_path="$TOOLCHAIN_LIB"
+dependency_libs=0
+for pkg in "$COSMO_BUILD_WORKSPACE"/.lake/packages/*; do
+  [ -e "$pkg" ] || continue
+  if [ -L "$pkg" ]; then
+    echo "ERROR: symlinked dependency package: $pkg" >&2
+    exit 1
+  fi
+  [ -d "$pkg" ] || continue
+  lib="$pkg/.lake/build/lib/lean"
+  [ -e "$lib" ] || continue
+  if [ -L "$lib" ] || [ ! -d "$lib" ]; then
+    echo "ERROR: invalid dependency Lean output: $lib" >&2
+    exit 1
+  fi
+  dependency_lean_path="$dependency_lean_path:$lib"
+  dependency_libs="$((dependency_libs + 1))"
+done
+test "$dependency_libs" -gt 0
+
+project_output="$COSMO_BUILD_WORKSPACE/.lake/build/lib/lean"
+project_lean_path="$dependency_lean_path:$project_output"
+
+compile_project_module() {
+  local source="$1"
+  local output="$2"
+  echo "Compiling $source -> $output"
+  sudo -u cosmobuild env -i \
+    HOME="$BUILD_HOME" PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+    LEAN_PATH="$project_lean_path" \
+    LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
+    LEAN_NUM_THREADS="$LEAN_NUM_THREADS" \
+    bash -c 'cd "$1"; shift; exec "$@"' \
+    _ "$COSMO_BUILD_WORKSPACE" \
+    "$PINNED_LEAN_HOME/bin/lean" -DwarningAsError=true \
+    -o "$output" "$source"
+}
+
+# This list is the exact reviewed `lean_lib` module set in lakefile.lean.
+# Adding/removing a configured project module requires updating this protected
+# compilation list in the same reviewed change, so no sibling root can be
+# silently omitted from kernel replay and semantic auditing.
+compile_project_module CosmoTrust.lean "$project_output/CosmoTrust.olean"
+compile_project_module cosmovirus.lean "$project_output/cosmovirus.olean"
+compile_project_module COSMO.lean "$project_output/COSMO.olean"
 terminate_identity cosmobuild
 end_group
 
