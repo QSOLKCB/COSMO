@@ -8,6 +8,8 @@ on:
       - 'scripts/verify-lean-source-state.py'
       - 'scripts/run-lean-verified-reuse-ci.sh'
       - 'scripts/verify-lean-dependency-artifacts.py'
+      - 'scripts/prepare-lean-audit.py'
+      - 'scripts/check-lean-trust.sh'
       - 'CosmoTrust.lean'
       - 'COSMO.lean'
       - 'cosmovirus.lean'
