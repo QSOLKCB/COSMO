@@ -22,15 +22,20 @@ PR A establishes the first reproducible integrity baseline:
 
 - Lean 4 is pinned to **v4.33.1**.
 - Mathlib is pinned to commit `0df444a360eaa60ab8c11dca51a86af692955474` (tag `v4.33.1`).
-- Project Lean warnings are treated as errors, so parsed `sorry` / `admit` admissions cannot survive as non-fatal build warnings even inside context-sensitive interpolation syntax.
+- The project imports only the Lean `omega` tactic and Mathlib `Ring` tactic surface it currently needs rather than the umbrella `Mathlib` module.
+- Project Lean warnings are treated as errors, so parsed `sorry` / `admit` admissions cannot survive as non-fatal warnings even inside context-sensitive interpolation syntax.
 - Project-authored `sorry`, `admit`, direct `sorryAx`, custom Lean `axiom` / `constant` declarations, all project `opaque` declarations, `native_decide`, direct `Lean.ofReduceBool` trust, and direct kernel-check bypasses are rejected by the trusted-core policy.
 - The lexical trust scanner handles identifier-bang executable interpolation expressions, quoted trusted-base names, Lean identifier suffixes, raw and character literals, and symlinked `.lean` modules.
-- CI builds only in a disposable workspace under an unprivileged `cosmobuild` identity that cannot modify the reviewed checkout or its trust programs.
-- After compilation, all build-owned processes are terminated, tracked source is compared against the reviewed commit, and the project artifact tree is made root-owned and read-only.
-- `scripts/prepare-lean-audit.py` parses the frozen Lake manifest, includes tracked local path packages, discovers every project-controlled `.olean`, rejects symlinked package/output paths and module shadowing, and derives a deterministic direct `LEAN_PATH`.
-- The pinned `leanchecker` replays every captured project module through the kernel.
-- The protected semantic runner is compiled from reviewed source, frozen read-only, and invoked directly with `lean`. It does **not** execute `lake`, `lake env`, project `lakefile.lean`, or imported project `initialize` actions under audit privileges.
-- The semantic runner audits every declaration emitted by the captured project modules, rejects axiom-like and opaque declaration kinds, and checks transitive dependencies against the explicit allow-list `propext`, `Classical.choice`, and `Quot.sound`.
+- CI materializes a disposable workspace under an unprivileged `cosmobuild` identity that cannot modify the reviewed checkout or its trust programs.
+- Lake is used only before project compilation to regenerate the pinned dependency manifest and materialize dependency artifacts. PR A deliberately rejects local Lake `path` packages rather than recursively trusting mutable nested manifests.
+- After dependency resolution, all build-owned processes are terminated and the manifest, dependency sources, and dependency artifacts are made root-owned and read-only.
+- CI records a deterministic run-local receipt over every dependency build artifact before project compilation and requires the complete 130,468-file set to remain byte-identical afterward. The receipt is immutability evidence for that run, not a self-authenticating provenance claim.
+- COSMO's reviewed library modules are then compiled directly with the pinned `lean` binary and `warningAsError`, in dependency order, into the only project-owned writable output directory. Lake is not invoked while project modules are executing.
+- `scripts/prepare-lean-audit.py` discovers every captured project `.olean`, rejects symlinked or non-standard proof outputs, rejects hidden/custom `.olean` trees, preserves Lean module-name round trips, and derives a deterministic direct `LEAN_PATH` whose search order is pinned toolchain, frozen dependencies, then project outputs.
+- The reviewed semantic runner is compiled before project modules are loaded, with only the pinned Lean toolchain visible, then frozen root-owned and read-only.
+- From the finished project module headers, the runner derives the exact external dependency roots COSMO actually imports. That dependency closure is replayed into a fresh kernel environment and may not introduce axioms outside the pinned Lean toolchain.
+- Every captured COSMO module is then kernel-replayed and every declaration it emits is semantically audited without executing imported project `initialize` actions.
+- The semantic audit rejects axiom-like and opaque project declaration kinds and checks transitive dependencies against the explicit allow-list `propext`, `Classical.choice`, and `Quot.sound`.
 - CI synthesizes both a generated axiom and a malformed unchecked theorem and requires the semantic audit and kernel replay to reject them.
 - Arithmetic decision proofs use kernel reduction (`decide`) rather than native-evaluator proof shortcuts.
 - The Lucas-number computation proves `L_101 = 1281597540372340914251`.
@@ -44,18 +49,21 @@ PR A establishes the first reproducible integrity baseline:
 
 The ban on project `opaque` declarations is intentionally conservative for this baseline. It closes both source-written and generated opaque declaration paths without asking the lightweight source lexer to distinguish bodyless from bodyful syntax. A future need for legitimate opacity should be introduced with an explicit trust-policy change and semantic audit coverage.
 
+The ban on local Lake `path` packages is also deliberate for PR A. Supporting them safely requires reviewed recursive configuration provenance. Until that policy exists, introducing one is a hard CI failure rather than a silent expansion of the trusted project surface.
+
 ## Repository map
 
 | Path | Purpose |
 |---|---|
 | `COSMO.lean` | Aggregate root for the current COSMO library |
 | `cosmovirus.lean` | Machine-checked discrete core |
-| `CosmoTrust.lean` | Semantic environment audit and non-initializing protected runner |
+| `CosmoTrust.lean` | Semantic environment audit, dependency-closure replay, and non-initializing protected runner |
 | `cosmovirus.py` | Deterministic Python mirror |
 | `tests/` | Python regression tests |
 | `scripts/check-lean-trust.sh` | Fast lexical preflight for forbidden Lean source constructs |
-| `scripts/prepare-lean-audit.py` | Frozen manifest, artifact, symlink, and local-package audit layout validation |
-| `scripts/run-lean-integrity-ci.sh` | Isolated build, kernel replay, protected semantic audit, and negative fixtures |
+| `scripts/prepare-lean-audit.py` | Frozen manifest, artifact, symlink, path-package, and import-layout validation |
+| `scripts/verify-lean-dependency-artifacts.py` | Run-local dependency artifact receipt and immutability verification |
+| `scripts/run-lean-integrity-ci.sh` | Isolated dependency resolution, direct project compilation, kernel replay, semantic audit, and negative fixtures |
 | `audit/AxiomAudit.lean` | Local package-audit convenience entry point |
 | `audit/AUDIT-RESOLUTION.md` | Disposition of the September 2026 audit findings |
 | `KNOWN_LIMITATIONS.md` | Explicit trust and scope boundaries |
@@ -76,7 +84,7 @@ lake env leanchecker COSMO CosmoTrust cosmovirus
 lake env lean audit/AxiomAudit.lean
 ```
 
-These commands are useful local checks. The authoritative CI boundary is stronger: it performs the build under a separate identity, freezes and inventories the resulting artifact graph, and runs direct non-Lake kernel and semantic audits against that frozen graph. `scripts/run-lean-integrity-ci.sh` expects the GitHub Actions environment and `sudo`; it is not intended as the ordinary local developer command.
+These commands are useful local checks. The authoritative CI boundary is stronger: it resolves dependencies before project execution, freezes and fingerprints them, directly compiles the reviewed COSMO modules with the pinned Lean binary, derives the actual external dependency closure from the resulting module headers, and performs direct non-Lake kernel and semantic audits against the frozen graph. `scripts/run-lean-integrity-ci.sh` expects the GitHub Actions environment and `sudo`; it is not intended as the ordinary local developer command.
 
 ## Run the Python checks
 
