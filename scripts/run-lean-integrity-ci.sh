@@ -168,23 +168,23 @@ print(f"Isolated source verification passed for {len(tracked)} tracked path(s)."
 PY
 end_group
 
-begin_group "Freeze outputs and create trusted audit enclave"
+begin_group "Freeze project outputs and create one-time compiler enclave"
 sudo chown -R root:root "$COSMO_BUILD_WORKSPACE"
 sudo chmod -R a+rX "$COSMO_BUILD_WORKSPACE"
 sudo chmod -R a-w "$COSMO_BUILD_WORKSPACE"
 sudo rm -rf "$COSMO_AUDIT_WORKSPACE"
-sudo install -d -o root -g root -m 0755 "$COSMO_AUDIT_WORKSPACE"
+sudo install -d -o cosmoaudit -g cosmoaudit -m 0700 "$COSMO_AUDIT_WORKSPACE"
 
 if sudo -u cosmoaudit test -w "$COSMO_BUILD_WORKSPACE"; then
   echo "ERROR: audit identity can write the frozen project workspace." >&2
   exit 1
 fi
-if sudo -u cosmoaudit test -w "$COSMO_AUDIT_WORKSPACE"; then
-  echo "ERROR: audit identity can write the trusted audit enclave." >&2
+if ! sudo -u cosmoaudit test -w "$COSMO_AUDIT_WORKSPACE"; then
+  echo "ERROR: audit identity cannot populate the one-time compiler enclave." >&2
   exit 1
 fi
 if sudo -u cosmobuild test -w "$COSMO_AUDIT_WORKSPACE"; then
-  echo "ERROR: build identity can write the trusted audit enclave." >&2
+  echo "ERROR: build identity can write the audit compiler enclave." >&2
   exit 1
 fi
 end_group
@@ -214,7 +214,7 @@ sudo -u cosmoaudit env -i \
   "$PINNED_LEAN_HOME/bin/leanchecker" "${modules[@]}"
 end_group
 
-begin_group "Install reviewed auditor and immutable regression fixtures"
+begin_group "Compile reviewed auditor and freeze immutable fixtures"
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"; cleanup' EXIT
 cp CosmoTrust.lean "$staging/CosmoTrustAudit.lean"
@@ -252,28 +252,44 @@ run_cmd do
   }
 LEAN
 
-LEAN_PATH="$lean_path" "$PINNED_LEAN_HOME/bin/lean" \
-  -o "$staging/CosmoTrustAudit.olean" \
-  "$staging/CosmoTrustAudit.lean"
-
-sudo install -o root -g root -m 0444 \
+sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
   "$staging/CosmoTrustAudit.lean" \
   "$COSMO_AUDIT_WORKSPACE/CosmoTrustAudit.lean"
-sudo install -o root -g root -m 0444 \
-  "$staging/CosmoTrustAudit.olean" \
-  "$COSMO_AUDIT_WORKSPACE/CosmoTrustAudit.olean"
-sudo install -o root -g root -m 0444 \
+sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
   "$staging/GeneratedAxiomFixture.lean" \
   "$COSMO_AUDIT_WORKSPACE/GeneratedAxiomFixture.lean"
-sudo install -o root -g root -m 0444 \
+sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
   "$staging/GeneratedUncheckedTheorem.lean" \
   "$COSMO_AUDIT_WORKSPACE/GeneratedUncheckedTheorem.lean"
+
+# Compile only the reviewed auditor before freezing. It imports Lean modules,
+# not project modules, and this direct invocation never evaluates lakefile.lean.
+sudo -u cosmoaudit env -i \
+  HOME="$AUDIT_HOME" \
+  PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+  LEAN_PATH="$lean_path" \
+  LC_ALL=C.UTF-8 \
+  LANG=C.UTF-8 \
+  TZ=UTC \
+  LEAN_NUM_THREADS=1 \
+  bash -c 'cd "$1"; shift; exec "$@"' \
+  _ "$COSMO_AUDIT_WORKSPACE" \
+  "$PINNED_LEAN_HOME/bin/lean" \
+  -o "$COSMO_AUDIT_WORKSPACE/CosmoTrustAudit.olean" \
+  "$COSMO_AUDIT_WORKSPACE/CosmoTrustAudit.lean"
+
+sudo chown -R root:root "$COSMO_AUDIT_WORKSPACE"
+sudo find "$COSMO_AUDIT_WORKSPACE" -type f -exec chmod 0444 {} +
 sudo chmod 0555 "$COSMO_AUDIT_WORKSPACE"
 rm -rf "$staging"
 trap cleanup EXIT
 
 if sudo -u cosmoaudit test -w "$COSMO_AUDIT_WORKSPACE"; then
   echo "ERROR: audit identity can modify the staged auditor." >&2
+  exit 1
+fi
+if sudo -u cosmobuild test -w "$COSMO_AUDIT_WORKSPACE"; then
+  echo "ERROR: build identity can modify the staged auditor." >&2
   exit 1
 fi
 end_group
@@ -310,7 +326,7 @@ if sudo -u cosmoaudit env -i \
   TZ=UTC \
   LEAN_NUM_THREADS=1 \
   bash -c 'cd "$1"; shift; exec "$@"' \
-  _ "$AUDIT_HOME" \
+  _ "$COSMO_AUDIT_WORKSPACE" \
   "$PINNED_LEAN_HOME/bin/lean" \
   "$COSMO_AUDIT_WORKSPACE/GeneratedAxiomFixture.lean" \
   >"$generated_report" 2>&1
@@ -335,6 +351,8 @@ sudo -u cosmoaudit env -i \
   LANG=C.UTF-8 \
   TZ=UTC \
   LEAN_NUM_THREADS=1 \
+  bash -c 'cd "$1"; shift; exec "$@"' \
+  _ "$COSMO_AUDIT_WORKSPACE" \
   "$PINNED_LEAN_HOME/bin/lean" \
   -o "$unchecked_output" \
   "$COSMO_AUDIT_WORKSPACE/GeneratedUncheckedTheorem.lean"
