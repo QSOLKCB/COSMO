@@ -204,10 +204,11 @@ def analyze(workspace: Path, manifest: Path, toolchain_lib: Path) -> Analysis:
     if not project_artifacts:
         raise AuditLayoutError("no project-controlled Lean .olean artifacts found")
 
-    # Trusted modules always precede project outputs. A project artifact using
-    # the same module name as the toolchain or a pinned dependency therefore
-    # resolves to the trusted artifact; CosmoTrust then rejects the project
-    # artifact because its exact path does not round-trip through `findOLean`.
+    # Search order is itself part of the trust boundary. The pinned Lean
+    # toolchain must win every collision, verified external dependencies come
+    # next, and project output is last. A project therefore cannot shadow an
+    # auditor/toolchain import, and dependency packages cannot replace Lean's
+    # trusted-base modules merely by choosing the same module name.
     trusted_entries = tuple([toolchain_lib] + external_outputs)
     lean_entries = tuple([toolchain_lib] + external_outputs + [project_output])
     for path in lean_entries:
@@ -264,6 +265,7 @@ def self_test() -> None:
         assert root_output in result.project_output_dirs
         assert external_output in result.trusted_path_entries
         assert result.trusted_path_entries[0] == toolchain_lib
+        assert result.lean_path_entries[0] == toolchain_lib
         assert result.lean_path_entries[-1] == root_output
 
         hidden = root_output / "Hidden.olean"
