@@ -176,18 +176,18 @@ private unsafe def replayModule (moduleName : Name) : IO Unit := do
       files := files.push privateFile
 
   let parts ← readModuleDataParts files
-  if parts.isEmpty then
+  if h : parts.size = 0 then
     throw <| IO.userError s!"failed to read module data for {moduleName}"
-
-  let moduleData := parts[0]!.1
-  let (_, state) ← importModulesCore moduleData.imports |>.run
-  let env ← finalizeImport state moduleData.imports {} 0 false false (isModule := true)
-  let mut constants := {}
-  let lastPart := parts[parts.size - 1]!.1
-  for name in lastPart.constNames, info in lastPart.constants do
-    constants := constants.insert name info
-  let replayed ← env.replay constants
-  replayed.freeRegions
+  else
+    let (moduleData, _) := parts[0]
+    let (_, state) ← importModulesCore moduleData.imports |>.run
+    let env ← finalizeImport state moduleData.imports {} 0 false false (isModule := true)
+    let mut constants := {}
+    for name in parts[parts.size - 1].1.constNames,
+        info in parts[parts.size - 1].1.constants do
+      constants := constants.insert name info
+    let replayed ← env.replay constants
+    replayed.freeRegions
 
 /--
 Resolve one absolute `.olean` path to Lean's exact module `Name`.
