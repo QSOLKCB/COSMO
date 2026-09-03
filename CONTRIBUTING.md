@@ -16,23 +16,35 @@ A formal theorem about a project-defined label does not automatically establish 
 
 ## Lean changes
 
-Before opening a PR:
+Before opening a PR, run the ordinary local checks:
 
 ```bash
 lake build
 ./scripts/check-lean-trust.sh
+lake env leanchecker COSMO CosmoTrust cosmovirus
 lake env lean audit/AxiomAudit.lean
 ```
 
 The trusted core rejects project-authored `sorry`, `admit`, direct `sorryAx`, custom `axiom` or `constant` declarations, all project `opaque` declarations, `native_decide`, direct `Lean.ofReduceBool` trust, and direct kernel-check bypasses such as `debug.skipKernelTC` or `addDeclWithoutChecking`. Arithmetic decision proofs should use kernel reduction (`decide`) or another proof-producing tactic.
 
-`lake build` runs the COSMO package with Lean's `warningAsError` option enabled. This is a compiler-level backstop: if Lean parses a synthetic-sorry warning from any executable syntax, including context-sensitive interpolation forms, the build fails even if that syntax is outside the lightweight lexical scanner's model.
+`lake build` runs the COSMO package with Lean's `warningAsError` option enabled. This is a compiler-level backstop: if Lean parses a synthetic-sorry warning from executable syntax, the build fails even when that syntax is outside the lightweight lexical scanner's model.
 
-The source preflight separately treats executable identifier-bang interpolation expressions as code (covering built-ins such as `s!`, `m!`, `f!`, `v!` and project macros with the same lexical shape), recognizes Lean identifier suffixes such as `'`, `?`, and `!`, masks ordinary and raw string literals correctly, preserves dangerous quoted trusted-base names for inspection, and scans `.lean` symlinks as source modules.
+The source preflight treats executable identifier-bang interpolation expressions as code, recognizes Lean identifier suffixes, masks ordinary, raw, and character literals correctly, preserves dangerous quoted trusted-base names for inspection, and scans `.lean` symlinks as source modules.
 
-Source scanning is not the final trust decision. CI replays every built project module with the pinned toolchain's `leanchecker`. `CosmoTrust.lean` then examines Lean's elaborated environment after compilation, discovers every declaration emitted by the COSMO Lake package, rejects forbidden declaration kinds, and checks the transitive dependencies of every declaration against the reviewed foundation allow-list `propext`, `Classical.choice`, and `Quot.sound`. The package has one `COSMO.lean` root so the audit imports every built module. This includes private, auxiliary, macro-generated, and command-elaborator-generated declarations, so adding a theorem to a maintained audit list is no longer required.
+Local commands are not the complete protected boundary. GitHub Actions archives the reviewed commit into a disposable workspace and executes `lake build` under an unprivileged `cosmobuild` identity that cannot write the reviewed checkout. Once compilation ends, CI terminates that identity's processes, verifies every tracked file against the reviewed source, and freezes the artifact tree root-owned and read-only.
 
-CI also builds intentional generated-axiom and unchecked-malformed-theorem fixtures, then requires the semantic audit and kernel replay to reject them. Changes to macros, elaborators, package roots, or the trust audit must preserve those negative regression tests.
+The protected audit then:
+
+1. parses the frozen `lake-manifest.json`, including tracked local `path` packages;
+2. discovers every project-controlled `.olean` output rather than assuming one package root;
+3. rejects symlinked package/output paths, symlinked `.olean` files, and project module shadowing;
+4. runs the pinned `leanchecker` directly over every captured project module;
+5. compiles the reviewed semantic runner without importing project modules, then freezes it read-only;
+6. invokes `lean` directly with a derived frozen `LEAN_PATH`, never `lake` or `lake env` under audit privileges;
+7. loads captured project modules with `Lean.withImportModules` without project initializers;
+8. rejects axiom-like or opaque declaration kinds and any transitive dependency outside `propext`, `Classical.choice`, and `Quot.sound`.
+
+CI also builds intentional generated-axiom and unchecked-malformed-theorem fixtures, then requires the semantic audit and kernel replay to reject them. Changes to macros, elaborators, package roots, local path dependencies, artifact layout, or trust tooling must preserve those negative tests.
 
 The current baseline intentionally forbids `opaque` declarations altogether. If a future formalization genuinely needs an opaque definition, propose a reviewed trust-policy change together with semantic audit coverage.
 
