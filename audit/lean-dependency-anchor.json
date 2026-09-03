@@ -1,0 +1,16 @@
+{
+  "schema": "COSMO-OPT-LEAN-ANCHOR-1",
+  "opt_record": "OPT-LEAN-001",
+  "lean_version": "4.33.1",
+  "lean_toolchain_sha256": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71",
+  "lean_linux_archive_sha256": "890afd185370f85666025b883914ab4f4b339136f8c96167b69cfb62aecaf235",
+  "lake_manifest_sha256": "da84374efd9e7a24d40bbd0273c55409f1957fe121b6a795d3d5776381edc86e",
+  "mathlib_commit": "0df444a360eaa60ab8c11dca51a86af692955474",
+  "dependency_root": "Mathlib.Tactic.Ring",
+  "artifact_count": 130468,
+  "canonical_sha256": "3f690588dd7099d8cd68c681f4927e43f42c5cab3ba3c9c2f9bc9b31df8dea51",
+  "source_cache_schema": "cosmo-lean-source-v1",
+  "build_cache_schema": "cosmo-lean-build-v1",
+  "authority": "reviewed cryptographic commitment to sorted dependency build-artifact path,size,sha256 records",
+  "cold_authority": "only the isolated cold-trust workflow may claim reconstruction from pinned dependency source on that exact run"
+}

@@ -1,0 +1,381 @@
+name: COSMO Lean Cold Trust
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/lean-cold-trust.yml'
+      - 'scripts/verify-lean-source-state.py'
+      - 'scripts/run-lean-verified-reuse-ci.sh'
+      - 'scripts/verify-lean-dependency-artifacts.py'
+      - 'scripts/prepare-lean-audit.py'
+      - 'scripts/check-lean-trust.sh'
+      - 'CosmoTrust.lean'
+      - 'COSMO.lean'
+      - 'cosmovirus.lean'
+      - 'lakefile.lean'
+      - 'lean-toolchain'
+      - 'LEAN-CACHE-POLICY.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cosmo-lean-cold-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LC_ALL: C.UTF-8
+  LANG: C.UTF-8
+  TZ: UTC
+  PYTHONHASHSEED: '0'
+  COSMO_BUILD_WORKSPACE: /tmp/cosmo-build-workspace
+  COSMO_AUDIT_WORKSPACE: /tmp/cosmo-audit-workspace
+  COLD_ARTIFACTS: /tmp/cosmo-cold-artifacts
+  LEAN_VERSION: '4.33.1'
+  LEAN_LINUX_SHA256: '890afd185370f85666025b883914ab4f4b339136f8c96167b69cfb62aecaf235'
+  EXPECTED_LEAN_TOOLCHAIN_SHA256: '3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71'
+  EXPECTED_LAKE_MANIFEST_SHA256: 'da84374efd9e7a24d40bbd0273c55409f1957fe121b6a795d3d5776381edc86e'
+  MATHLIB_COMMIT: '0df444a360eaa60ab8c11dca51a86af692955474'
+
+jobs:
+  isolated-cold-trust:
+    name: Lean 4 isolated cold trust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout reviewed COSMO source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+
+      - name: Install hash-pinned Lean distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "x86_64"
+          echo "${EXPECTED_LEAN_TOOLCHAIN_SHA256}  lean-toolchain" | sha256sum --check --strict
+          archive="$RUNNER_TEMP/lean-${LEAN_VERSION}-linux.tar.zst"
+          url="https://github.com/leanprover/lean4/releases/download/v${LEAN_VERSION}/lean-${LEAN_VERSION}-linux.tar.zst"
+          curl --fail --location --proto '=https' --tlsv1.2 "$url" --output "$archive"
+          echo "${LEAN_LINUX_SHA256}  ${archive}" | sha256sum --check --strict
+          tar --zstd -xf "$archive" -C "$RUNNER_TEMP"
+          lean_home="$RUNNER_TEMP/lean-${LEAN_VERSION}-linux"
+          test -x "$lean_home/bin/lean"
+          test -x "$lean_home/bin/lake"
+          test -x "$lean_home/bin/leanchecker"
+          echo "$lean_home/bin" >> "$GITHUB_PATH"
+          echo "PINNED_LEAN_HOME=$lean_home" >> "$GITHUB_ENV"
+          "$lean_home/bin/lean" --version
+          "$lean_home/bin/lake" --version
+
+      - name: Configure bounded cold-build parallelism
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpus="$(nproc)"
+          workers="$cpus"
+          if [ "$workers" -gt 4 ]; then workers=4; fi
+          if [ "$workers" -lt 1 ]; then workers=1; fi
+          echo "LEAN_NUM_THREADS=${workers}" >> "$GITHUB_ENV"
+          echo "Cold Lean build will use ${workers} thread(s) on ${cpus} CPU(s)."
+
+      - name: Prepare isolated identities and COSMO workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin cosmoresolve 2>/dev/null || true
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin cosmodepbuild 2>/dev/null || true
+          sudo rm -rf "$COSMO_BUILD_WORKSPACE" "$COSMO_AUDIT_WORKSPACE" "$COLD_ARTIFACTS" \
+            /tmp/cosmoresolve-home /tmp/cosmodepbuild-home
+          mkdir -p "$COSMO_BUILD_WORKSPACE"
+          git archive --format=tar HEAD | tar -xf - -C "$COSMO_BUILD_WORKSPACE"
+          sudo install -d -o cosmoresolve -g cosmoresolve -m 0700 /tmp/cosmoresolve-home
+          sudo install -d -o cosmodepbuild -g cosmodepbuild -m 0700 /tmp/cosmodepbuild-home
+
+          # Isolated identities may traverse to the hash-pinned toolchain but
+          # cannot modify it or the reviewed checkout.
+          sudo chmod o+x /home/runner /home/runner/work "$RUNNER_TEMP"
+          for identity in cosmoresolve cosmodepbuild; do
+            if sudo -u "$identity" test -w "$GITHUB_WORKSPACE"; then
+              echo "$identity can write reviewed checkout" >&2
+              exit 1
+            fi
+            if sudo -u "$identity" test -w "$PINNED_LEAN_HOME"; then
+              echo "$identity can write pinned Lean distribution" >&2
+              exit 1
+            fi
+          done
+
+      - name: Resolve exact COSMO dependency graph without compiled cache reuse
+        shell: bash
+        run: |
+          set -euo pipefail
+          terminate_resolver() {
+            sudo pkill -TERM -u cosmoresolve 2>/dev/null || true
+            for _ in 1 2 3 4 5; do
+              if ! sudo pgrep -u cosmoresolve >/dev/null 2>&1; then return 0; fi
+              sleep 1
+            done
+            sudo pkill -KILL -u cosmoresolve 2>/dev/null || true
+            ! sudo pgrep -u cosmoresolve >/dev/null 2>&1
+          }
+
+          sudo chown -R cosmoresolve:cosmoresolve "$COSMO_BUILD_WORKSPACE"
+          sudo -u cosmoresolve env -i \
+            HOME=/tmp/cosmoresolve-home \
+            PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+            MATHLIB_NO_CACHE_ON_UPDATE=1 \
+            LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
+            LEAN_NUM_THREADS="$LEAN_NUM_THREADS" \
+            bash -c 'cd "$1"; rm -f lake-manifest.json; exec "$2" update' \
+            _ "$COSMO_BUILD_WORKSPACE" "$PINNED_LEAN_HOME/bin/lake"
+          terminate_resolver
+
+          manifest="$COSMO_BUILD_WORKSPACE/lake-manifest.json"
+          test -f "$manifest"
+          test ! -L "$manifest"
+          actual="$(sha256sum "$manifest" | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_LAKE_MANIFEST_SHA256"
+          echo "Cold COSMO manifest verified sha256=$actual"
+
+          packages="$COSMO_BUILD_WORKSPACE/.lake/packages"
+          test -d "$packages"
+          test ! -L "$packages"
+          for pkg in "$packages"/*; do
+            [ -e "$pkg" ] || continue
+            if [ -L "$pkg" ] || [ ! -d "$pkg" ]; then
+              echo "Resolved dependency package is symlinked or non-directory: $pkg" >&2
+              exit 1
+            fi
+            sudo rm -rf -- "$pkg/.lake"
+          done
+
+          # The resolver is dead. Transfer the exact source graph to the trusted
+          # verifier, which canonicalizes Git metadata and proves every tracked
+          # byte/mode against the revisions in the frozen COSMO manifest.
+          sudo chown -R root:root "$COSMO_BUILD_WORKSPACE"
+          sudo chmod -R u+rwX,go+rX "$packages"
+          sudo python3 scripts/verify-lean-source-state.py \
+            --root "$packages" \
+            --lake-manifest "$manifest" \
+            --expected-manifest-sha256 "$EXPECTED_LAKE_MANIFEST_SHA256" \
+            --dependency-declaration "$COSMO_BUILD_WORKSPACE/lakefile.lean" \
+            --receipt "$RUNNER_TEMP/cold-source-before-build.json" \
+            --write-receipt
+          sudo chown root:root "$RUNNER_TEMP/cold-source-before-build.json"
+          sudo chmod 0444 "$RUNNER_TEMP/cold-source-before-build.json"
+
+          # Mathlib owns the cold dependency build. Check that its checked-in
+          # transitive manifest agrees with the already verified COSMO graph so
+          # no inner `lake update` is required or permitted.
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["COSMO_BUILD_WORKSPACE"])
+          top = json.loads((root / "lake-manifest.json").read_text())
+          mathlib_manifest = json.loads(
+              (root / ".lake/packages/mathlib/lake-manifest.json").read_text()
+          )
+          top_packages = {
+              item["name"]: (item.get("type"), item.get("url"), item.get("rev"))
+              for item in top["packages"]
+              if item.get("name") != "mathlib"
+          }
+          nested_packages = {
+              item["name"]: (item.get("type"), item.get("url"), item.get("rev"))
+              for item in mathlib_manifest["packages"]
+          }
+          if top_packages != nested_packages:
+              missing = sorted(set(top_packages) ^ set(nested_packages))
+              changed = sorted(
+                  name for name in set(top_packages) & set(nested_packages)
+                  if top_packages[name] != nested_packages[name]
+              )
+              raise SystemExit(
+                  f"Mathlib transitive manifest disagrees with COSMO graph; "
+                  f"missing={missing} changed={changed}"
+              )
+          print(f"Verified Mathlib transitive graph entries={len(nested_packages)}")
+          PY
+
+          sudo chown -R root:root "$COSMO_BUILD_WORKSPACE"
+          sudo chmod -R a+rX "$COSMO_BUILD_WORKSPACE"
+          sudo chmod -R a-w "$COSMO_BUILD_WORKSPACE"
+
+      - name: Build imported Mathlib closure from verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages="$COSMO_BUILD_WORKSPACE/.lake/packages"
+          mathlib="$packages/mathlib"
+          nested="$mathlib/.lake/packages"
+          test -d "$mathlib"
+          test ! -L "$mathlib"
+
+          # Re-home the already verified transitive package sources under the
+          # verified Mathlib workspace. No dependency revision is refreshed.
+          sudo install -d -o root -g root -m 0755 "$mathlib/.lake"
+          sudo install -d -o root -g root -m 0755 "$nested"
+          for pkg in "$packages"/*; do
+            [ -e "$pkg" ] || continue
+            [ "$pkg" = "$mathlib" ] && continue
+            if [ -L "$pkg" ] || [ ! -d "$pkg" ]; then
+              echo "Dependency package changed type before cold build: $pkg" >&2
+              exit 1
+            fi
+            sudo mv "$pkg" "$nested/$(basename "$pkg")"
+          done
+
+          # Only generated Lake state is writable by the dependency builder.
+          sudo install -d -o cosmodepbuild -g cosmodepbuild -m 0700 "$mathlib/.lake/build"
+          sudo install -d -o cosmodepbuild -g cosmodepbuild -m 0700 "$mathlib/.lake/config"
+          for pkg in "$nested"/*; do
+            [ -d "$pkg" ] || continue
+            sudo install -d -o cosmodepbuild -g cosmodepbuild -m 0755 "$pkg/.lake"
+            sudo install -d -o cosmodepbuild -g cosmodepbuild -m 0700 "$pkg/.lake/build"
+            sudo install -d -o cosmodepbuild -g cosmodepbuild -m 0700 "$pkg/.lake/config"
+          done
+
+          # ProofWidgets may derive a lock-file hash next to its tracked lock.
+          # Pre-create only that known generated file and remove it before the
+          # post-build source verification below.
+          lock="$nested/proofwidgets/widget/package-lock.json"
+          if [ -f "$lock" ]; then
+            sudo install -o cosmodepbuild -g cosmodepbuild -m 0600 /dev/null "${lock}.hash"
+          fi
+
+          start="$(date +%s)"
+          sudo -u cosmodepbuild env -i \
+            HOME=/tmp/cosmodepbuild-home \
+            PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+            MATHLIB_NO_CACHE_ON_UPDATE=1 \
+            LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
+            LEAN_NUM_THREADS="$LEAN_NUM_THREADS" \
+            bash -c 'cd "$1"; exec "$2" --no-cache build Mathlib.Tactic.Ring' \
+            _ "$mathlib" "$PINNED_LEAN_HOME/bin/lake"
+          sudo pkill -TERM -u cosmodepbuild 2>/dev/null || true
+          for _ in 1 2 3 4 5; do
+            if ! sudo pgrep -u cosmodepbuild >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          sudo pkill -KILL -u cosmodepbuild 2>/dev/null || true
+          ! sudo pgrep -u cosmodepbuild >/dev/null 2>&1
+          end="$(date +%s)"
+          echo "COLD_DEPENDENCY_BUILD_SECONDS=$((end-start))" >> "$GITHUB_ENV"
+
+          # The builder is dead. Freeze its generated outputs before the trusted
+          # side checks the expected imported root.
+          sudo chown -R root:root "$mathlib"
+          sudo chmod -R a+rX "$mathlib"
+          sudo chmod -R a-w "$mathlib"
+          test -f "$mathlib/.lake/build/lib/lean/Mathlib/Tactic/Ring.olean"
+
+      - name: Restore package layout and prove source stayed identical
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages="$COSMO_BUILD_WORKSPACE/.lake/packages"
+          mathlib="$packages/mathlib"
+          nested="$mathlib/.lake/packages"
+
+          # Restore the COSMO package layout while preserving each cold-built
+          # `.lake/build` tree. Remove the one explicitly permitted generated
+          # source-adjacent lock hash before source verification.
+          lock="$nested/proofwidgets/widget/package-lock.json.hash"
+          sudo rm -f -- "$lock"
+          for pkg in "$nested"/*; do
+            [ -d "$pkg" ] || continue
+            sudo mv "$pkg" "$packages/$(basename "$pkg")"
+          done
+          sudo rmdir "$nested"
+
+          # Stage generated proof artifacts outside the source trees while the
+          # exact dependency sources are re-verified. The vault is root-owned;
+          # it becomes read/traverse-only after staging so the runner can
+          # enumerate it without granting either build identity write access.
+          sudo rm -rf "$COLD_ARTIFACTS"
+          sudo install -d -o root -g root -m 0755 "$COLD_ARTIFACTS"
+          for pkg in "$packages"/*; do
+            [ -d "$pkg" ] || continue
+            name="$(basename "$pkg")"
+            if [ -d "$pkg/.lake/build" ]; then
+              sudo mv "$pkg/.lake/build" "$COLD_ARTIFACTS/$name"
+            fi
+            sudo rm -rf "$pkg/.lake"
+          done
+          sudo chmod 0555 "$COLD_ARTIFACTS"
+          if sudo -u cosmodepbuild test -w "$COLD_ARTIFACTS"; then
+            echo "dependency-build identity can write frozen cold artifact vault" >&2
+            exit 1
+          fi
+          if sudo -u cosmoresolve test -w "$COLD_ARTIFACTS"; then
+            echo "resolver identity can write frozen cold artifact vault" >&2
+            exit 1
+          fi
+
+          # With generated Lake state staged outside the source tree, require
+          # the exact dependency source graph to verify again after the build.
+          sudo chmod -R u+rwX,go+rX "$packages"
+          sudo python3 scripts/verify-lean-source-state.py \
+            --root "$packages" \
+            --lake-manifest "$COSMO_BUILD_WORKSPACE/lake-manifest.json" \
+            --expected-manifest-sha256 "$EXPECTED_LAKE_MANIFEST_SHA256" \
+            --dependency-declaration "$COSMO_BUILD_WORKSPACE/lakefile.lean" \
+            --receipt "$RUNNER_TEMP/cold-source-after-build.json" \
+            --write-receipt
+
+          # The before/after receipts bind the same declaration/manifest and
+          # package commit trees. Exact equality is a compact source-mutation
+          # witness for the cold build.
+          cmp --silent "$RUNNER_TEMP/cold-source-before-build.json" \
+            "$RUNNER_TEMP/cold-source-after-build.json"
+
+          for staged in "$COLD_ARTIFACTS"/*; do
+            [ -d "$staged" ] || continue
+            name="$(basename "$staged")"
+            pkg="$packages/$name"
+            sudo install -d -o root -g root -m 0555 "$pkg/.lake"
+            sudo mv "$staged" "$pkg/.lake/build"
+          done
+          sudo rm -rf "$COLD_ARTIFACTS"
+          sudo rm -rf "$COSMO_BUILD_WORKSPACE/.lake/config" "$COSMO_BUILD_WORKSPACE/.lake/build"
+
+          sudo chown -R root:root "$COSMO_BUILD_WORKSPACE"
+          sudo chmod -R a+rX "$COSMO_BUILD_WORKSPACE"
+          sudo chmod -R a-w "$COSMO_BUILD_WORKSPACE"
+          sudo chmod 0444 "$COSMO_BUILD_WORKSPACE/lake-manifest.json"
+
+          python3 scripts/verify-lean-dependency-artifacts.py snapshot \
+            --root "$packages" \
+            --receipt "$RUNNER_TEMP/cold-dependency-artifacts.json"
+
+      - name: Run protected COSMO audit against cold-built dependencies
+        id: cold-protected-pipeline
+        shell: bash
+        env:
+          COSMO_DEPENDENCY_AUTHORITY: ${{ github.event_name == 'workflow_dispatch' && 'cold-source-reconstruction' || 'cold-lane-validation' }}
+        run: bash scripts/run-lean-verified-reuse-ci.sh
+
+      - name: Record cold-trust evidence
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### COSMO cold-trust lane"
+            echo "- Trigger: \`${{ github.event_name }}\`"
+            echo "- Dependency caches restored: \`false\`"
+            echo "- Mathlib revision: \`${MATHLIB_COMMIT}\`"
+            echo "- Imported dependency root: \`Mathlib.Tactic.Ring\`"
+            echo "- Cold dependency build seconds: \`${COLD_DEPENDENCY_BUILD_SECONDS:-unavailable}\`"
+            echo "- Protected pipeline outcome: \`${{ steps.cold-protected-pipeline.outcome }}\`"
+            if [ "${{ steps.cold-protected-pipeline.outcome }}" != "success" ]; then
+              echo "- Authority: \`incomplete/failed; no cold-trust claim\`"
+            elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "- Authority: \`release-grade cold source reconstruction\`"
+            else
+              echo "- Authority: \`validation only; manual dispatch is release-grade\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

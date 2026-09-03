@@ -29,7 +29,7 @@ PR A establishes the first reproducible integrity baseline:
 - CI materializes a disposable workspace under an unprivileged `cosmobuild` identity that cannot modify the reviewed checkout or its trust programs.
 - Lake is used only before project compilation to regenerate the pinned dependency manifest and materialize dependency artifacts. PR A deliberately rejects local Lake `path` packages rather than recursively trusting mutable nested manifests.
 - After dependency resolution, all build-owned processes are terminated and the manifest, dependency sources, and dependency artifacts are made root-owned and read-only.
-- CI records a deterministic run-local receipt over every dependency build artifact before project compilation and requires the complete 130,468-file set to remain byte-identical afterward. The receipt is immutability evidence for that run, not a self-authenticating provenance claim.
+- CI records a deterministic run-local receipt over every dependency build artifact before project compilation and requires the complete dependency set to remain byte-identical afterward. The receipt is immutability evidence for that run, not a self-authenticating provenance claim.
 - COSMO's reviewed library modules are then compiled directly with the pinned `lean` binary and `warningAsError`, in dependency order, into the only project-owned writable output directory. Lake is not invoked while project modules are executing.
 - `scripts/prepare-lean-audit.py` discovers every captured project `.olean`, rejects symlinked or non-standard proof outputs, rejects hidden/custom `.olean` trees, preserves Lean module-name round trips, and derives a deterministic direct `LEAN_PATH` whose search order is pinned toolchain, frozen dependencies, then project outputs.
 - The reviewed semantic runner is compiled before project modules are loaded, with only the pinned Lean toolchain visible, then frozen root-owned and read-only.
@@ -49,7 +49,20 @@ PR A establishes the first reproducible integrity baseline:
 
 The ban on project `opaque` declarations is intentionally conservative for this baseline. It closes both source-written and generated opaque declaration paths without asking the lightweight source lexer to distinguish bodyless from bodyful syntax. A future need for legitimate opacity should be introduced with an explicit trust-policy change and semantic audit coverage.
 
-The ban on local Lake `path` packages is also deliberate for PR A. Supporting them safely requires reviewed recursive configuration provenance. Until that policy exists, introducing one is a hard CI failure rather than a silent expansion of the trusted project surface.
+The ban on local Lake `path` packages is also deliberate for the current protected boundary. Supporting them safely requires reviewed recursive configuration provenance. Until that policy exists, introducing one is a hard CI failure rather than a silent expansion of the trusted project surface.
+
+## Phase B1 verified dependency reuse
+
+Phase B1 applies immutable QSOL OPT v1.0.0 record `OPT-LEAN-001` without changing the theorem or audit contract.
+
+The routine GitHub Actions lane separates dependency reuse into two independently authenticated cache classes:
+
+- **source state**, verified against the frozen manifest revisions, tracked Git bytes/modes, worktree closure, and hardened Git metadata rules; and
+- **compiled dependency artifacts**, verified against the reviewed external anchor in `audit/lean-dependency-anchor.json`.
+
+A cache key is never proof authority. The complete current COSMO module set is rebuilt from reviewed source after dependency state has been authenticated and frozen. `scripts/run-lean-verified-reuse-ci.sh` is the protected routine runner used by `.github/workflows/ci.yml`.
+
+`.github/workflows/lean-cold-trust.yml` is the separate no-cache reconstruction lane. Pull-request executions validate the cold path; only a successful manual dispatch is intended to support a release-grade statement that the dependency graph was reconstructed from pinned source on that exact run. See [`LEAN-CACHE-POLICY.md`](LEAN-CACHE-POLICY.md) for the normative evidence boundary.
 
 ## Repository map
 
@@ -62,8 +75,13 @@ The ban on local Lake `path` packages is also deliberate for PR A. Supporting th
 | `tests/` | Python regression tests |
 | `scripts/check-lean-trust.sh` | Fast lexical preflight for forbidden Lean source constructs |
 | `scripts/prepare-lean-audit.py` | Frozen manifest, artifact, symlink, path-package, and import-layout validation |
-| `scripts/verify-lean-dependency-artifacts.py` | Run-local dependency artifact receipt and immutability verification |
-| `scripts/run-lean-integrity-ci.sh` | Isolated dependency resolution, direct project compilation, kernel replay, semantic audit, and negative fixtures |
+| `scripts/verify-lean-source-state.py` | Hardened Git dependency-source identity and source-cache receipt verification |
+| `scripts/verify-lean-dependency-artifacts.py` | Reviewed dependency-artifact anchor plus run-local immutability receipts |
+| `scripts/run-lean-verified-reuse-ci.sh` | Authoritative protected routine B1 rebuild, kernel replay, semantic audit, and negative fixtures |
+| `scripts/run-lean-integrity-ci.sh` | Historical PR-A integrity runner retained for baseline provenance, not the active B1 CI entry point |
+| `.github/workflows/ci.yml` | Routine verified-reuse CI orchestration |
+| `.github/workflows/lean-cold-trust.yml` | No-cache cold reconstruction and validation lane |
+| `LEAN-CACHE-POLICY.md` | Normative B1 cache, trust, evidence, and rollback policy |
 | `audit/AxiomAudit.lean` | Local package-audit convenience entry point |
 | `audit/AUDIT-RESOLUTION.md` | Disposition of the September 2026 audit findings |
 | `KNOWN_LIMITATIONS.md` | Explicit trust and scope boundaries |
@@ -84,7 +102,9 @@ lake env leanchecker COSMO CosmoTrust cosmovirus
 lake env lean audit/AxiomAudit.lean
 ```
 
-These commands are useful local checks. The authoritative CI boundary is stronger: it resolves dependencies before project execution, freezes and fingerprints them, directly compiles the reviewed COSMO modules with the pinned Lean binary, derives the actual external dependency closure from the resulting module headers, and performs direct non-Lake kernel and semantic audits against the frozen graph. `scripts/run-lean-integrity-ci.sh` expects the GitHub Actions environment and `sudo`; it is not intended as the ordinary local developer command.
+These commands are useful local checks. The authoritative routine CI boundary is stronger: `.github/workflows/ci.yml` independently verifies dependency source and compiled-artifact identities, freezes them, then invokes `scripts/run-lean-verified-reuse-ci.sh` to directly compile the reviewed COSMO modules with the pinned Lean binary, derive the actual external dependency closure from the resulting module headers, and perform direct non-Lake kernel and semantic audits against the frozen graph. The protected runner expects the GitHub Actions isolation environment and `sudo`; it is not an ordinary local developer command.
+
+For release-grade dependency reconstruction, use the separately documented manual cold-trust workflow rather than describing a verified-cache run as a cold build.
 
 ## Run the Python checks
 

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Create and verify a run-local receipt for Lean dependency build artifacts.
+"""Create and verify Lean dependency build-artifact receipts.
 
-This receipt is an immutability witness, not an external provenance authority.
-Protected CI first validates the dependency proof environment with the pinned
-Lean kernel, then snapshots every regular file under each dependency package's
-`.lake/build` tree. After COSMO project compilation, the same file set must
-produce the identical canonical digest and artifact count.
+Phase B1 uses two distinct receipt roles:
 
-The externally anchored OPT-LEAN-001 two-cache design remains a later roadmap
-optimization. PR A deliberately avoids pretending that Mathlib's public cache
-artifact population is identical to QSOL-GEO-REASON's cold-build receipt.
+* a run-local receipt proves the frozen dependency build tree did not change
+  while current COSMO source was compiled; and
+* the reviewed anchor under `audit/lean-dependency-anchor.json` is external to
+  every cache and cryptographically commits to the canonical sorted
+  `(path, size, sha256)` record stream plus its expected artifact count.
+
+A cache hit is never accepted merely because it contains a receipt beside the
+objects it is trying to authenticate.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "COSMO-LEAN-DEPS-RUN-RECEIPT-1"
+ANCHOR_SCHEMA = "COSMO-OPT-LEAN-ANCHOR-1"
 
 
 class VerificationError(RuntimeError):
@@ -128,20 +130,66 @@ def verify_receipt(root: Path, receipt: Path) -> None:
     )
 
 
+def load_anchor(path: Path) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise VerificationError(f"reviewed dependency anchor is missing or symlinked: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise VerificationError(f"cannot read reviewed dependency anchor: {error}") from error
+    if data.get("schema") != ANCHOR_SCHEMA:
+        raise VerificationError(
+            f"dependency anchor schema mismatch: {data.get('schema')!r} != {ANCHOR_SCHEMA!r}"
+        )
+    count = data.get("artifact_count")
+    digest = data.get("canonical_sha256")
+    if not isinstance(count, int) or count <= 0:
+        raise VerificationError("reviewed dependency anchor has invalid artifact_count")
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise VerificationError("reviewed dependency anchor has invalid canonical_sha256")
+    return data
+
+
+def verify_anchor(root: Path, anchor: Path) -> None:
+    expected = load_anchor(anchor)
+    actual = snapshot(root)
+    if actual["artifact_count"] != expected["artifact_count"]:
+        raise VerificationError(
+            "dependency artifact count mismatch: "
+            f"{actual['artifact_count']} != {expected['artifact_count']}"
+        )
+    if actual["canonical_sha256"] != expected["canonical_sha256"]:
+        raise VerificationError(
+            "dependency artifact canonical SHA-256 mismatch: "
+            f"{actual['canonical_sha256']} != {expected['canonical_sha256']}"
+        )
+    print(
+        "Lean dependency reviewed anchor verified: "
+        f"files={actual['artifact_count']} canonical_sha256={actual['canonical_sha256']}"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
+
     for command in ("snapshot", "verify"):
         sub = subparsers.add_parser(command)
         sub.add_argument("--root", type=Path, required=True)
         sub.add_argument("--receipt", type=Path, required=True)
-    args = parser.parse_args()
 
+    anchor_parser = subparsers.add_parser("verify-anchor")
+    anchor_parser.add_argument("--root", type=Path, required=True)
+    anchor_parser.add_argument("--anchor", type=Path, required=True)
+
+    args = parser.parse_args()
     try:
         if args.command == "snapshot":
             write_receipt(args.root, args.receipt)
-        else:
+        elif args.command == "verify":
             verify_receipt(args.root, args.receipt)
+        else:
+            verify_anchor(args.root, args.anchor)
     except VerificationError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
