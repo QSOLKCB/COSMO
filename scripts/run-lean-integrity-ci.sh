@@ -11,8 +11,15 @@ set -euo pipefail
 BUILD_HOME=/tmp/cosmobuild-home
 AUDIT_HOME=/tmp/cosmoaudit-home
 LEAN_PATH_FILE="$RUNNER_TEMP/cosmo-lean-path.txt"
-MODULES_FILE="$RUNNER_TEMP/cosmo-project-modules.txt"
-MANIFEST_SNAPSHOT="$RUNNER_TEMP/cosmo-prebuild-lake-manifest.json"
+TRUSTED_LEAN_PATH_FILE="$RUNNER_TEMP/cosmo-trusted-lean-path.txt"
+ARTIFACTS_FILE="$RUNNER_TEMP/cosmo-project-artifacts.txt"
+MANIFEST_SNAPSHOT="$RUNNER_TEMP/cosmo-lake-manifest.prebuild.json"
+TOOLCHAIN_LIB="$PINNED_LEAN_HOME/lib/lean"
+
+# Canonical dependency artifact authority imported from the reviewed
+# OPT-LEAN-001 / QSOL-GEO-REASON Lean 4.33.1 + mathlib v4.33.1 receipt.
+EXPECTED_DEP_CANONICAL_SHA256=91f7181f1657481a8a00a3f4fe67b8d5663951838b5a0a76ef2adbd8b54e66d3
+EXPECTED_DEP_ARTIFACT_COUNT=37312
 
 begin_group() {
   printf '::group::%s\n' "$1"
@@ -44,7 +51,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-begin_group "Self-test audit layout and scan reviewed Lean source"
+begin_group "Self-test protected audit helpers and scan reviewed Lean source"
 python3 scripts/prepare-lean-audit.py --self-test
 ./scripts/check-lean-trust.sh
 end_group
@@ -71,6 +78,7 @@ for path in \
   scripts/check-lean-trust.sh \
   scripts/prepare-lean-audit.py \
   scripts/run-lean-integrity-ci.sh \
+  scripts/verify-lean-dependency-artifacts.py \
   CosmoTrust.lean \
   audit/AxiomAudit.lean \
   COSMO.lean \
@@ -84,43 +92,104 @@ do
 done
 sudo -u cosmobuild test -x "$PINNED_LEAN_HOME/bin/lean"
 sudo -u cosmobuild test -x "$PINNED_LEAN_HOME/bin/lake"
+test -d "$TOOLCHAIN_LIB"
 end_group
 
-begin_group "Freeze Lake manifest before project compilation"
-manifest_path="$COSMO_BUILD_WORKSPACE/lake-manifest.json"
+begin_group "Regenerate dependency configuration before project compilation"
+# Never trust a manifest restored by the performance cache. Remove it and ask
+# Lake to resolve the reviewed dependency declaration afresh. `lake update`
+# evaluates package configuration but does not compile COSMO project modules.
+sudo -u cosmobuild env -i \
+  HOME="$BUILD_HOME" \
+  PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+  LC_ALL=C.UTF-8 \
+  LANG=C.UTF-8 \
+  TZ=UTC \
+  LEAN_NUM_THREADS="$LEAN_NUM_THREADS" \
+  bash -c 'cd "$1"; rm -f lake-manifest.json; exec "$2" update' \
+  _ "$COSMO_BUILD_WORKSPACE" "$PINNED_LEAN_HOME/bin/lake"
 
-# On a cold cache, materialize dependency resolution before any project module
-# is compiled. `lake update` elaborates the reviewed Lake configuration and
-# resolves dependencies, but it does not build the COSMO Lean roots. The
-# resulting manifest is then copied outside the build-owned workspace and made
-# immutable before `lake build` can execute project compile-time code.
-if [ ! -f "$manifest_path" ]; then
-  sudo -u cosmobuild env -i \
-    HOME="$BUILD_HOME" \
-    PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
-    LC_ALL=C.UTF-8 \
-    LANG=C.UTF-8 \
-    TZ=UTC \
-    LEAN_NUM_THREADS="$LEAN_NUM_THREADS" \
-    bash -c 'cd "$1"; shift; exec "$@"' \
-    _ "$COSMO_BUILD_WORKSPACE" \
-    "$PINNED_LEAN_HOME/bin/lake" update
-fi
-
-if [ ! -f "$manifest_path" ] || [ -L "$manifest_path" ]; then
-  echo "ERROR: pre-build Lake manifest is missing, non-regular, or symlinked." >&2
+manifest="$COSMO_BUILD_WORKSPACE/lake-manifest.json"
+if [ -L "$manifest" ] || [ ! -f "$manifest" ]; then
+  echo "ERROR: fresh Lake manifest is missing, non-regular, or symlinked." >&2
   exit 1
 fi
-sudo install -o root -g root -m 0444 "$manifest_path" "$MANIFEST_SNAPSHOT"
-manifest_snapshot_sha="$(sha256sum "$MANIFEST_SNAPSHOT" | awk '{print $1}')"
-echo "Frozen pre-build Lake manifest sha256=$manifest_snapshot_sha"
+
+# PR A deliberately forbids local path packages. This removes mutable nested
+# package manifests from the protected trust boundary until a later reviewed
+# policy explicitly adds them.
+python3 - "$manifest" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = Path(sys.argv[1])
+data = json.loads(manifest.read_text(encoding="utf-8"))
+packages = data.get("packages", [])
+if not isinstance(packages, list):
+    raise SystemExit("ERROR: fresh Lake manifest packages entry is not a list")
+path_packages = [
+    package.get("name", "<unnamed>")
+    for package in packages
+    if isinstance(package, dict) and package.get("type") == "path"
+]
+if path_packages:
+    raise SystemExit(
+        "ERROR: protected COSMO baseline forbids local Lake path packages: "
+        + ", ".join(map(str, path_packages))
+    )
+print("Fresh Lake manifest contains no local path packages.")
+PY
+end_group
+
+begin_group "Authenticate dependency artifacts before project compilation"
+python3 scripts/verify-lean-dependency-artifacts.py \
+  --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
+  --expected-canonical-sha256 "$EXPECTED_DEP_CANONICAL_SHA256" \
+  --expected-artifact-count "$EXPECTED_DEP_ARTIFACT_COUNT"
+
+sudo install -o root -g root -m 0444 "$manifest" "$MANIFEST_SNAPSHOT"
 if sudo -u cosmobuild test -w "$MANIFEST_SNAPSHOT"; then
-  echo "ERROR: build identity can modify the frozen Lake manifest snapshot." >&2
+  echo "ERROR: build identity can modify immutable manifest snapshot." >&2
+  exit 1
+fi
+manifest_sha="$(sha256sum "$MANIFEST_SNAPSHOT" | awk '{print $1}')"
+echo "Frozen fresh pre-build Lake manifest sha256=$manifest_sha"
+end_group
+
+begin_group "Freeze dependencies and expose only project build output"
+terminate_identity cosmobuild
+
+# Freeze the entire resolved source/dependency/configuration tree. The project
+# compiler receives write permission only to the standard top-level build
+# directory. This prevents command elaborators from replacing dependency proof
+# objects, manifests, package configuration, or reviewed source during build.
+sudo chown -R root:root "$COSMO_BUILD_WORKSPACE"
+sudo chmod -R a+rX "$COSMO_BUILD_WORKSPACE"
+sudo chmod -R a-w "$COSMO_BUILD_WORKSPACE"
+sudo rm -rf "$COSMO_BUILD_WORKSPACE/.lake/build"
+sudo install -d -o cosmobuild -g cosmobuild -m 0700 \
+  "$COSMO_BUILD_WORKSPACE/.lake/build"
+
+if sudo -u cosmobuild test -w "$COSMO_BUILD_WORKSPACE"; then
+  echo "ERROR: build identity can write frozen workspace root." >&2
+  exit 1
+fi
+if sudo -u cosmobuild test -w "$manifest"; then
+  echo "ERROR: build identity can write frozen Lake manifest." >&2
+  exit 1
+fi
+if sudo -u cosmobuild test -w "$COSMO_BUILD_WORKSPACE/.lake/packages"; then
+  echo "ERROR: build identity can write frozen dependency tree." >&2
+  exit 1
+fi
+if ! sudo -u cosmobuild test -w "$COSMO_BUILD_WORKSPACE/.lake/build"; then
+  echo "ERROR: build identity cannot write isolated project build output." >&2
   exit 1
 fi
 end_group
 
-begin_group "Build project under isolated identity"
+begin_group "Build current COSMO source against frozen dependencies"
 sudo -u cosmobuild env -i \
   HOME="$BUILD_HOME" \
   PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
@@ -133,28 +202,27 @@ sudo -u cosmobuild env -i \
   "$PINNED_LEAN_HOME/bin/lake" build
 end_group
 
-begin_group "Terminate build descendants"
+begin_group "Terminate project build descendants"
 terminate_identity cosmobuild
 end_group
 
-begin_group "Verify Lake manifest stayed identical to pre-build trust snapshot"
-manifest_path="$COSMO_BUILD_WORKSPACE/lake-manifest.json"
-if [ ! -f "$manifest_path" ] || [ -L "$manifest_path" ]; then
-  echo "ERROR: build replaced, removed, or symlinked lake-manifest.json." >&2
+begin_group "Verify dependency configuration remained immutable"
+if [ -L "$manifest" ] || [ ! -f "$manifest" ]; then
+  echo "ERROR: project build replaced the Lake manifest path." >&2
   exit 1
 fi
-if ! cmp -s "$MANIFEST_SNAPSHOT" "$manifest_path"; then
-  snapshot_sha="$(sha256sum "$MANIFEST_SNAPSHOT" | awk '{print $1}')"
-  live_sha="$(sha256sum "$manifest_path" | awk '{print $1}')"
-  echo "ERROR: lake-manifest.json changed after the pre-build trust snapshot." >&2
-  echo "       snapshot sha256=$snapshot_sha" >&2
-  echo "       post-build sha256=$live_sha" >&2
+cmp --silent "$MANIFEST_SNAPSHOT" "$manifest" || {
+  echo "ERROR: project build changed the fresh pre-build Lake manifest." >&2
   exit 1
-fi
-echo "Lake manifest remained byte-identical to the immutable pre-build snapshot."
+}
+python3 scripts/verify-lean-dependency-artifacts.py \
+  --root "$COSMO_BUILD_WORKSPACE/.lake/packages" \
+  --expected-canonical-sha256 "$EXPECTED_DEP_CANONICAL_SHA256" \
+  --expected-artifact-count "$EXPECTED_DEP_ARTIFACT_COUNT"
+echo "Dependency configuration and artifacts remained immutable during project build."
 end_group
 
-begin_group "Verify isolated build source stayed identical"
+begin_group "Verify isolated project source stayed identical"
 python3 - <<'PY'
 from __future__ import annotations
 
@@ -221,56 +289,39 @@ PY
 end_group
 
 begin_group "Freeze project outputs and create one-time compiler enclave"
-sudo chown -R root:root "$COSMO_BUILD_WORKSPACE"
-sudo chmod -R a+rX "$COSMO_BUILD_WORKSPACE"
-sudo chmod -R a-w "$COSMO_BUILD_WORKSPACE"
+sudo chown -R root:root "$COSMO_BUILD_WORKSPACE/.lake/build"
+sudo chmod -R a+rX "$COSMO_BUILD_WORKSPACE/.lake/build"
+sudo chmod -R a-w "$COSMO_BUILD_WORKSPACE/.lake/build"
 sudo rm -rf "$COSMO_AUDIT_WORKSPACE"
 sudo install -d -o cosmoaudit -g cosmoaudit -m 0700 "$COSMO_AUDIT_WORKSPACE"
 
-if sudo -u cosmoaudit test -w "$COSMO_BUILD_WORKSPACE"; then
-  echo "ERROR: audit identity can write the frozen project workspace." >&2
+if sudo -u cosmoaudit test -w "$COSMO_BUILD_WORKSPACE/.lake/build"; then
+  echo "ERROR: audit identity can write frozen project proof outputs." >&2
   exit 1
 fi
 if ! sudo -u cosmoaudit test -w "$COSMO_AUDIT_WORKSPACE"; then
-  echo "ERROR: audit identity cannot populate the one-time compiler enclave." >&2
+  echo "ERROR: audit identity cannot populate one-time compiler enclave." >&2
   exit 1
 fi
 if sudo -u cosmobuild test -w "$COSMO_AUDIT_WORKSPACE"; then
-  echo "ERROR: build identity can write the audit compiler enclave." >&2
+  echo "ERROR: build identity can write audit compiler enclave." >&2
   exit 1
 fi
 end_group
 
-begin_group "Derive frozen import path and complete project module set"
-# `lake-manifest.json` is safe to consume here only because the byte-for-byte
-# comparison above proved it still matches the immutable snapshot captured
-# before project compilation. Local-path-package trust therefore cannot be
-# downgraded by compile-time code rewriting the build-owned manifest.
+begin_group "Derive complete frozen project artifact set"
 python3 scripts/prepare-lean-audit.py \
   --workspace "$COSMO_BUILD_WORKSPACE" \
-  --manifest "$COSMO_BUILD_WORKSPACE/lake-manifest.json" \
+  --manifest "$manifest" \
+  --toolchain-lib "$TOOLCHAIN_LIB" \
   --lean-path-output "$LEAN_PATH_FILE" \
-  --modules-output "$MODULES_FILE"
-sudo chown root:root "$LEAN_PATH_FILE" "$MODULES_FILE"
-sudo chmod 0444 "$LEAN_PATH_FILE" "$MODULES_FILE"
+  --trusted-lean-path-output "$TRUSTED_LEAN_PATH_FILE" \
+  --artifacts-output "$ARTIFACTS_FILE"
+sudo chown root:root "$LEAN_PATH_FILE" "$TRUSTED_LEAN_PATH_FILE" "$ARTIFACTS_FILE"
+sudo chmod 0444 "$LEAN_PATH_FILE" "$TRUSTED_LEAN_PATH_FILE" "$ARTIFACTS_FILE"
 end_group
 
-begin_group "Replay every captured project module through the kernel"
-lean_path="$(cat "$LEAN_PATH_FILE")"
-mapfile -t modules < "$MODULES_FILE"
-test "${#modules[@]}" -gt 0
-sudo -u cosmoaudit env -i \
-  HOME="$AUDIT_HOME" \
-  PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
-  LEAN_PATH="$lean_path" \
-  LC_ALL=C.UTF-8 \
-  LANG=C.UTF-8 \
-  TZ=UTC \
-  LEAN_NUM_THREADS=1 \
-  "$PINNED_LEAN_HOME/bin/leanchecker" "${modules[@]}"
-end_group
-
-begin_group "Compile reviewed auditor and freeze immutable fixtures"
+begin_group "Compile reviewed auditor without project import paths"
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"; cleanup' EXIT
 cp CosmoTrust.lean "$staging/CosmoTrustAudit.lean"
@@ -318,12 +369,12 @@ sudo install -o cosmoaudit -g cosmoaudit -m 0600 \
   "$staging/GeneratedUncheckedTheorem.lean" \
   "$COSMO_AUDIT_WORKSPACE/GeneratedUncheckedTheorem.lean"
 
-# Compile only the reviewed auditor before freezing. It imports Lean modules,
-# not project modules, and this direct invocation never evaluates lakefile.lean.
+# Auditor compilation sees only the pinned Lean toolchain. Project output paths
+# cannot shadow Lean.Replay, Lean.collectAxioms, or any other trusted import.
 sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" \
   PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
-  LEAN_PATH="$lean_path" \
+  LEAN_PATH="$TOOLCHAIN_LIB" \
   LC_ALL=C.UTF-8 \
   LANG=C.UTF-8 \
   TZ=UTC \
@@ -341,22 +392,24 @@ rm -rf "$staging"
 trap cleanup EXIT
 
 if sudo -u cosmoaudit test -w "$COSMO_AUDIT_WORKSPACE"; then
-  echo "ERROR: audit identity can modify the staged auditor." >&2
+  echo "ERROR: audit identity can modify staged auditor." >&2
   exit 1
 fi
 if sudo -u cosmobuild test -w "$COSMO_AUDIT_WORKSPACE"; then
-  echo "ERROR: build identity can modify the staged auditor." >&2
+  echo "ERROR: build identity can modify staged auditor." >&2
   exit 1
 fi
 end_group
 
-begin_group "Run non-initializing semantic audit"
-audit_lean_path="$COSMO_AUDIT_WORKSPACE:$lean_path"
+begin_group "Replay exact project artifacts and run semantic audit"
+lean_path="$(cat "$LEAN_PATH_FILE")"
+mapfile -t artifacts < "$ARTIFACTS_FILE"
+test "${#artifacts[@]}" -gt 0
 audit_report="$RUNNER_TEMP/cosmo-semantic-audit.txt"
 sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" \
   PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
-  LEAN_PATH="$audit_lean_path" \
+  LEAN_PATH="$lean_path" \
   LC_ALL=C.UTF-8 \
   LANG=C.UTF-8 \
   TZ=UTC \
@@ -365,9 +418,9 @@ sudo -u cosmoaudit env -i \
   _ "$COSMO_AUDIT_WORKSPACE" \
   "$PINNED_LEAN_HOME/bin/lean" --run \
   "$COSMO_AUDIT_WORKSPACE/CosmoTrustAudit.lean" \
-  "${modules[@]}" | tee "$audit_report"
+  "${artifacts[@]}" | tee "$audit_report"
 
-marker_count="$(grep -cE '^COSMO_PROTECTED_AUDIT_COMPLETE modules=[0-9]+ declarations=[0-9]+ project_initializers=not_executed$' "$audit_report")"
+marker_count="$(grep -cE '^COSMO_PROTECTED_AUDIT_COMPLETE modules=[0-9]+ declarations=[0-9]+ kernel_replay=verified project_initializers=not_executed$' "$audit_report")"
 test "$marker_count" -eq 1
 end_group
 
@@ -376,7 +429,7 @@ generated_report="$RUNNER_TEMP/generated-axiom-report.txt"
 if sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" \
   PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
-  LEAN_PATH="$audit_lean_path" \
+  LEAN_PATH="$COSMO_AUDIT_WORKSPACE:$TOOLCHAIN_LIB" \
   LC_ALL=C.UTF-8 \
   LANG=C.UTF-8 \
   TZ=UTC \
@@ -402,13 +455,11 @@ sudo -u cosmoaudit rm -f "$unchecked_output"
 sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" \
   PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
-  LEAN_PATH="$lean_path" \
+  LEAN_PATH="$TOOLCHAIN_LIB" \
   LC_ALL=C.UTF-8 \
   LANG=C.UTF-8 \
   TZ=UTC \
   LEAN_NUM_THREADS=1 \
-  bash -c 'cd "$1"; shift; exec "$@"' \
-  _ "$COSMO_AUDIT_WORKSPACE" \
   "$PINNED_LEAN_HOME/bin/lean" \
   -o "$unchecked_output" \
   "$COSMO_AUDIT_WORKSPACE/GeneratedUncheckedTheorem.lean"
@@ -416,7 +467,7 @@ sudo -u cosmoaudit env -i \
 if sudo -u cosmoaudit env -i \
   HOME="$AUDIT_HOME" \
   PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
-  LEAN_PATH="$AUDIT_HOME:$lean_path" \
+  LEAN_PATH="$AUDIT_HOME:$TOOLCHAIN_LIB" \
   LC_ALL=C.UTF-8 \
   LANG=C.UTF-8 \
   TZ=UTC \
