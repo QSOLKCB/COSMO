@@ -169,8 +169,7 @@ private def runProtectedAudit
 Load frozen project modules without executing their `initialize` actions, then
 audit every declaration emitted by exactly those captured modules.
 -/
-unsafe def _root_.main : IO Unit := do
-  let args ← IO.getArgs
+unsafe def _root_.main (args : List String) : IO Unit := do
   let modules := args.toArray.map String.toName
   if modules.isEmpty then
     throw <| IO.userError "COSMO protected audit requires at least one module name."
