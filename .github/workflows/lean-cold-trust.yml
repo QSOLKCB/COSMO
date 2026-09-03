@@ -161,11 +161,22 @@ jobs:
           sleep 1
           ! sudo pgrep -u cosmoresolve >/dev/null 2>&1
 
-          python3 scripts/verify-cold-root-source.py \
+          # Close the resolver ownership boundary before verification. The
+          # trusted verifier needs to sanitize .git metadata, so it runs as root
+          # against a root-owned tree while the resolver is already dead.
+          sudo chown -R root:root "$COLD_MATHLIB"
+          sudo chmod -R u+rwX,go+rX "$COLD_MATHLIB"
+          if sudo -u cosmoresolve test -w "$COLD_MATHLIB"; then
+            echo "resolver identity can write Mathlib after clone freeze" >&2
+            exit 1
+          fi
+          sudo python3 scripts/verify-cold-root-source.py \
             --repo "$COLD_MATHLIB" \
             --expected-revision "$MATHLIB_COMMIT" \
             --expected-url "$MATHLIB_URL" \
             --receipt "$RUNNER_TEMP/cold-mathlib-root-source.json"
+          sudo chown root:root "$RUNNER_TEMP/cold-mathlib-root-source.json"
+          sudo chmod 0444 "$RUNNER_TEMP/cold-mathlib-root-source.json"
           echo "COLD_MATHLIB_MANIFEST_SHA256=$(sha256sum "$COLD_MATHLIB/lake-manifest.json" | awk '{print $1}')" >> "$GITHUB_ENV"
 
       - name: Resolve and verify Mathlib transitive source graph
@@ -204,13 +215,18 @@ jobs:
           sudo chown root:root "$COLD_MATHLIB/lake-manifest.json"
           sudo chmod 0444 "$COLD_MATHLIB/lake-manifest.json"
 
-          python3 scripts/verify-lean-source-state.py \
+          # This verifier intentionally rewrites hostile Git metadata into its
+          # safe canonical form. Run it as the trusted root verifier after the
+          # resolver process has been terminated and the source tree frozen.
+          sudo python3 scripts/verify-lean-source-state.py \
             --root "$COLD_MATHLIB/.lake/packages" \
             --lake-manifest "$COLD_MATHLIB/lake-manifest.json" \
             --expected-manifest-sha256 "$COLD_MATHLIB_MANIFEST_SHA256" \
             --dependency-declaration "$COLD_MATHLIB/lakefile.lean" \
             --receipt "$RUNNER_TEMP/cold-mathlib-transitive-source.json" \
             --write-receipt
+          sudo chown root:root "$RUNNER_TEMP/cold-mathlib-transitive-source.json"
+          sudo chmod 0444 "$RUNNER_TEMP/cold-mathlib-transitive-source.json"
 
       - name: Build imported Mathlib closure from verified source
         shell: bash
