@@ -110,6 +110,31 @@ jobs:
           echo "LEAN_NUM_THREADS=${workers}" >> "$GITHUB_ENV"
           echo "Lean will use ${workers} thread(s) on ${cpus} runner CPU(s)."
 
+      - name: Prepare isolated dependency cache identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin cosmoresolve 2>/dev/null || true
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin cosmodepbuild 2>/dev/null || true
+          sudo rm -rf /tmp/cosmoresolve-home /tmp/cosmodepbuild-home
+          sudo install -d -o cosmoresolve -g cosmoresolve -m 0700 /tmp/cosmoresolve-home
+          sudo install -d -o cosmodepbuild -g cosmodepbuild -m 0700 /tmp/cosmodepbuild-home
+
+          # The hash-pinned Lean distribution is under RUNNER_TEMP. Grant only
+          # traversal to the isolated identities; neither identity may modify
+          # the reviewed checkout or toolchain authority.
+          sudo chmod o+x /home/runner /home/runner/work "$RUNNER_TEMP"
+          for identity in cosmoresolve cosmodepbuild; do
+            if sudo -u "$identity" test -w "$GITHUB_WORKSPACE"; then
+              echo "$identity can write reviewed checkout" >&2
+              exit 1
+            fi
+            if sudo -u "$identity" test -w "$PINNED_LEAN_HOME"; then
+              echo "$identity can write pinned Lean distribution" >&2
+              exit 1
+            fi
+          done
+
       - name: Materialize isolated build workspace
         shell: bash
         run: |
@@ -134,25 +159,71 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd "$COSMO_BUILD_WORKSPACE"
-          rm -f lake-manifest.json
-          rm -rf .lake/packages
-          MATHLIB_NO_CACHE_ON_UPDATE=1 "$PINNED_LEAN_HOME/bin/lake" update
-          for pkg in .lake/packages/*; do
+          terminate_identity() {
+            local identity="$1"
+            sudo pkill -TERM -u "$identity" 2>/dev/null || true
+            for _ in 1 2 3 4 5; do
+              if ! sudo pgrep -u "$identity" >/dev/null 2>&1; then return 0; fi
+              sleep 1
+            done
+            sudo pkill -KILL -u "$identity" 2>/dev/null || true
+            ! sudo pgrep -u "$identity" >/dev/null 2>&1
+          }
+
+          # Unverified Lake/dependency configuration executes only inside the
+          # disposable workspace under an identity that cannot modify the
+          # reviewed checkout, verifier, artifact anchor, or pinned toolchain.
+          sudo chown -R cosmoresolve:cosmoresolve "$COSMO_BUILD_WORKSPACE"
+          sudo -u cosmoresolve env -i \
+            HOME=/tmp/cosmoresolve-home \
+            PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+            MATHLIB_NO_CACHE_ON_UPDATE=1 \
+            LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
+            LEAN_NUM_THREADS="$LEAN_NUM_THREADS" \
+            bash -c 'cd "$1"; rm -f lake-manifest.json; rm -rf .lake/packages; exec "$2" update' \
+            _ "$COSMO_BUILD_WORKSPACE" "$PINNED_LEAN_HOME/bin/lake"
+          terminate_identity cosmoresolve
+
+          lake_root="$COSMO_BUILD_WORKSPACE/.lake"
+          packages="$lake_root/packages"
+          if [ -L "$lake_root" ] || [ ! -d "$lake_root" ]; then
+            echo "Fresh dependency Lake root is missing or symlinked" >&2
+            exit 1
+          fi
+          if [ -L "$packages" ] || [ ! -d "$packages" ]; then
+            echo "Fresh dependency package root is missing or symlinked" >&2
+            exit 1
+          fi
+          for pkg in "$packages"/*; do
             [ -e "$pkg" ] || continue
             if [ -L "$pkg" ] || [ ! -d "$pkg" ]; then
               echo "Invalid dependency package after fresh resolution: $pkg" >&2
               exit 1
             fi
-            rm -rf "$pkg/.lake"
           done
-          python3 "$GITHUB_WORKSPACE/scripts/verify-lean-source-state.py" \
-            --root .lake/packages \
-            --lake-manifest lake-manifest.json \
+
+          # Reclaim the isolated workspace only after the resolver is dead.
+          # Recreate generated trust metadata so resolver-created symlinks
+          # cannot redirect the trusted receipt writer.
+          sudo chown -R root:root "$COSMO_BUILD_WORKSPACE"
+          sudo chmod -R u+rwX,go+rX "$COSMO_BUILD_WORKSPACE"
+          for pkg in "$packages"/*; do
+            sudo rm -rf -- "$pkg/.lake"
+          done
+          sudo rm -rf -- "$COSMO_BUILD_WORKSPACE/.lean-cache"
+          sudo install -d -o root -g root -m 0755 "$COSMO_BUILD_WORKSPACE/.lean-cache"
+
+          sudo python3 "$GITHUB_WORKSPACE/scripts/verify-lean-source-state.py" \
+            --root "$packages" \
+            --lake-manifest "$COSMO_BUILD_WORKSPACE/lake-manifest.json" \
             --expected-manifest-sha256 "$EXPECTED_LAKE_MANIFEST_SHA256" \
-            --dependency-declaration lakefile.lean \
-            --receipt .lean-cache/source-receipt.json \
+            --dependency-declaration "$GITHUB_WORKSPACE/lakefile.lean" \
+            --receipt "$COSMO_BUILD_WORKSPACE/.lean-cache/source-receipt.json" \
             --write-receipt
+          sudo chown root:root "$COSMO_BUILD_WORKSPACE/lake-manifest.json" \
+            "$COSMO_BUILD_WORKSPACE/.lean-cache/source-receipt.json"
+          sudo chmod 0444 "$COSMO_BUILD_WORKSPACE/lake-manifest.json" \
+            "$COSMO_BUILD_WORKSPACE/.lean-cache/source-receipt.json"
 
       - name: Verify restored dependency source cache hit
         if: steps.source-cache.outputs.cache-hit == 'true'
@@ -182,7 +253,7 @@ jobs:
             --root "$packages" \
             --lake-manifest "$COSMO_BUILD_WORKSPACE/lake-manifest.json" \
             --expected-manifest-sha256 "$EXPECTED_LAKE_MANIFEST_SHA256" \
-            --dependency-declaration "$COSMO_BUILD_WORKSPACE/lakefile.lean" \
+            --dependency-declaration "$GITHUB_WORKSPACE/lakefile.lean" \
             --receipt "$COSMO_BUILD_WORKSPACE/.lean-cache/source-receipt.json"
 
       - name: Save verified dependency source state
@@ -234,11 +305,72 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd "$COSMO_BUILD_WORKSPACE"
-          env -u MATHLIB_NO_CACHE_ON_UPDATE \
-            "$PINNED_LEAN_HOME/bin/lake" exe cache get
-          python3 "$GITHUB_WORKSPACE/scripts/verify-lean-dependency-artifacts.py" verify-anchor \
-            --root .lake/packages \
+          terminate_identity() {
+            local identity="$1"
+            sudo pkill -TERM -u "$identity" 2>/dev/null || true
+            for _ in 1 2 3 4 5; do
+              if ! sudo pgrep -u "$identity" >/dev/null 2>&1; then return 0; fi
+              sleep 1
+            done
+            sudo pkill -KILL -u "$identity" 2>/dev/null || true
+            ! sudo pgrep -u "$identity" >/dev/null 2>&1
+          }
+
+          packages="$COSMO_BUILD_WORKSPACE/.lake/packages"
+          root_config="$COSMO_BUILD_WORKSPACE/.lake/config"
+          if [ -L "$root_config" ] || [ ! -d "$root_config" ]; then
+            echo "Invalid root Lake config slot before cache materialization" >&2
+            exit 1
+          fi
+          sudo chown -R cosmodepbuild:cosmodepbuild "$root_config"
+
+          for pkg in "$packages"/*; do
+            [ -e "$pkg" ] || continue
+            if [ -L "$pkg" ] || [ ! -d "$pkg" ]; then
+              echo "Dependency package changed type before cache materialization: $pkg" >&2
+              exit 1
+            fi
+            for slot in "$pkg/.lake/build" "$pkg/.lake/config"; do
+              if [ -L "$slot" ] || [ ! -d "$slot" ]; then
+                echo "Invalid generated Lake slot before cache materialization: $slot" >&2
+                exit 1
+              fi
+              sudo chown -R cosmodepbuild:cosmodepbuild "$slot"
+            done
+          done
+
+          if sudo -u cosmodepbuild test -w "$COSMO_BUILD_WORKSPACE/lakefile.lean"; then
+            echo "dependency-build identity can write reviewed project configuration" >&2
+            exit 1
+          fi
+          if sudo -u cosmodepbuild test -w "$GITHUB_WORKSPACE"; then
+            echo "dependency-build identity can write reviewed checkout" >&2
+            exit 1
+          fi
+          if sudo -u cosmodepbuild test -w "$PINNED_LEAN_HOME"; then
+            echo "dependency-build identity can write pinned Lean distribution" >&2
+            exit 1
+          fi
+
+          # Mathlib's cache executable and any dependency Lake configuration run
+          # only under the isolated dependency-build identity. Its writable
+          # surface is limited to the generated config/build slots above.
+          sudo -u cosmodepbuild env -i \
+            HOME=/tmp/cosmodepbuild-home \
+            PATH="$PINNED_LEAN_HOME/bin:/usr/bin:/bin" \
+            LC_ALL=C.UTF-8 LANG=C.UTF-8 TZ=UTC \
+            LEAN_NUM_THREADS="$LEAN_NUM_THREADS" \
+            bash -c 'cd "$1"; exec "$2" exe cache get' \
+            _ "$COSMO_BUILD_WORKSPACE" "$PINNED_LEAN_HOME/bin/lake"
+          terminate_identity cosmodepbuild
+
+          # Freeze generated dependency state before the trusted runner checks
+          # it against the reviewed external artifact anchor.
+          sudo chown -R root:root "$packages"
+          sudo chmod -R a+rX "$packages"
+          sudo chmod -R a-w "$packages"
+          sudo python3 "$GITHUB_WORKSPACE/scripts/verify-lean-dependency-artifacts.py" verify-anchor \
+            --root "$packages" \
             --anchor "$GITHUB_WORKSPACE/audit/lean-dependency-anchor.json"
 
       - name: Verify reviewed build-artifact cache hit
