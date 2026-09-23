@@ -82,6 +82,24 @@ The `cosmo_core/` package is now the canonical runtime source for:
 
 The SECDED layer claims only its documented codeword capability. The full storage experiment and corruption/recovery round-trip remain Phase B5 work.
 
+## Phase B3 exact E8 and Weyl core
+
+Phase B3 applies immutable QSOL OPT v1.0.0 record `OPT-INV-001` to the first explicit E8 mathematical representation in COSMO.
+
+`cosmo_core/e8.py` uses **doubled integer coordinates**: an integer tuple `v` represents the mathematical vector `v / 2`. This keeps the complete root system and Weyl action exact:
+
+- 112 integer-family roots with two `±2` doubled coordinates;
+- 128 half-integer-family roots with eight `±1` doubled coordinates and an even number of negative signs;
+- 240 unique roots in deterministic lexicographic order;
+- exact rank 8 and squared norm 2 validation using rational arithmetic;
+- exact E8-lattice membership in doubled coordinates;
+- Weyl reflections `s_alpha(x) = x - <x, alpha> alpha`;
+- root-system closure, reflection involution, norm preservation, hyperplane fixed points, and lattice preservation checks;
+- one immutable cached canonical root/reflection table, accepted only after regeneration through the uncached reference path; and
+- reviewed canonical root-table SHA-256 `f6e7675c180edb41ea1c47705d7b14daeed7e08f3791dbdf1fc0c55ef156b662`.
+
+The canonical Weyl-reflection order is exactly the canonical root order. No floating-point geometry is used by the B3 E8 core.
+
 ## Repository map
 
 | Path | Purpose |
@@ -89,9 +107,10 @@ The SECDED layer claims only its documented codeword capability. The full storag
 | `COSMO.lean` | Aggregate root for the current COSMO library |
 | `cosmovirus.lean` | Machine-checked discrete core |
 | `CosmoTrust.lean` | Semantic environment audit, dependency-closure replay, and non-initializing protected runner |
-| `cosmo_core/` | Canonical deterministic Python arithmetic, payload, ECC, DNA, integrity, and manifest primitives |
+| `cosmo_core/` | Canonical deterministic Python arithmetic, payload, ECC, DNA, integrity, manifest, and exact E8/Weyl primitives |
+| `cosmo_core/e8.py` | Exact doubled-coordinate E8 roots, lattice predicates, canonical identity, and Weyl reflections |
 | `cosmovirus.py` | Compatibility-facing Python mirror backed by `cosmo_core` |
-| `tests/` | Python regression tests, including exhaustive small-domain B2 codec checks |
+| `tests/` | Python regression tests, including exhaustive small-domain B2 codec and B3 root/reflection checks |
 | `scripts/check-lean-trust.sh` | Fast lexical preflight for forbidden Lean source constructs |
 | `scripts/prepare-lean-audit.py` | Frozen manifest, artifact, symlink, path-package, and import-layout validation |
 | `scripts/verify-lean-source-state.py` | Hardened Git dependency-source identity and source-cache receipt verification |
@@ -133,6 +152,7 @@ The runtime module has no third-party dependency.
 python -m unittest discover -s tests -v
 (cd tests && python test_cosmovirus.py)
 (cd tests && python test_phase_b2.py)
+(cd tests && python test_phase_b3.py)
 python -m compileall -q cosmo_core cosmovirus.py tests
 ```
 
@@ -142,7 +162,7 @@ For the CI-equivalent static check:
 
 ```bash
 python -m pip install -r requirements-dev.txt
-mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py
+mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py
 ```
 
 ## Current design status

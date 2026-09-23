@@ -4,11 +4,18 @@ This file is part of COSMO's trust boundary. A green build means the checked cod
 
 ## Formal model
 
-- `CosmoLayer` is currently a six-constructor finite type. Its constructor names do not formalize E8, SiS2, HPV16, or archaeological objects themselves.
+- `CosmoLayer` is currently a six-constructor finite type. Phase B3 now provides an exact **Python computational** E8 root/Weyl model, but the `E8Symmetry` constructor is not yet linked to that model by a Lean theorem; SiS2, HPV16, and archaeological labels likewise remain names rather than formalized domain objects.
 - `psiEquation` is a legacy four-function composition. It does not match the six-generator category-theory cycle one-for-one. That reconstruction is intentionally deferred to PR C.
 - The category-theory paper is a design sketch. Its retract, natural-transformation, endofunctor, and periodicity claims are not yet Lean theorems.
 - `phiFloorQuantized` encodes the Lucas parity rule used by the project. PR A proves the concrete integer results needed by the baseline, but does not yet formalize the real-analysis theorem relating the definition to `Real.floor` for every exponent.
 - `diagApplyFloat` is executable only. No theorem assumes unrestricted floating-point arithmetic behaves as an exact ring.
+
+## Exact E8 computational boundary
+
+- Phase B3 represents E8 roots in doubled integer coordinates and validates the standard 240-root system, exact rank 8, norm-2 structure, lattice membership, and Weyl-reflection invariants computationally in Python.
+- The canonical root table is bound to an uncached reference generator and a reviewed SHA-256 identity. That is deterministic computational evidence, not a substitute for a future Lean formalization of the E8 construction.
+- Weyl reflections operate only on vectors satisfying the exact E8-lattice predicate used by the B3 model. The module does not claim that arbitrary COSMO symbolic state is an E8 lattice vector.
+- The existence of an exact E8 mathematical core does not establish any physical, biological, archaeological, or cosmological correspondence for other COSMO labels.
 
 ## Data and symbolic mappings
 
