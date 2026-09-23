@@ -12,7 +12,6 @@ SHA-256 authenticates recovered content; it is not used for error correction.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from itertools import islice
 from string import ascii_letters, digits
 from typing import Final
 
