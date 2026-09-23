@@ -16,7 +16,7 @@ License : MIT
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, TypedDict
+from typing import TypedDict
 
 from cosmo_core import (
     BYTE_LABELS,
@@ -54,7 +54,7 @@ class CosmoBit101:
 
     strand: bytes = DRAGON_SEED
     byte_labels: tuple[str, ...] = BYTE_LABELS
-    cuneiform_table: Mapping[int, tuple[str, str]] = field(\n        default_factory=lambda: dict(CUNEIFORM_TABLE)\n    )
+    cuneiform_table: dict[int, tuple[str, str]] = field(\n        default_factory=lambda: dict(CUNEIFORM_TABLE)\n    )
 
     def phi_power(self, n: int) -> float:
         """Return the floating-point approximation ``PHI ** n``."""
