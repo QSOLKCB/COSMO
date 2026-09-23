@@ -2,12 +2,14 @@ import math
 import sys
 import unittest
 from pathlib import Path
+from typing import Any, cast
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from cosmo_core import (
+    ArtifactDigest,
     DECLARED_SYMBOLIC_INVARIANT,
     DRAGON_SEED,
     GOLDEN_RATIO,
@@ -169,6 +171,81 @@ class ExperimentManifestTests(unittest.TestCase):
         self.assertNotEqual(
             baseline.sha256(),
             self._manifest(output=b"changed").sha256(),
+        )
+
+
+    def test_artifact_digest_rejects_untyped_schema_values(self) -> None:
+        digest = "0" * 64
+
+        with self.assertRaises(ValueError):
+            ArtifactDigest(cast(Any, 123), 1, digest)
+        with self.assertRaises(ValueError):
+            ArtifactDigest("artifact.bin", cast(Any, 1.5), digest)
+        with self.assertRaises(ValueError):
+            ArtifactDigest("artifact.bin", cast(Any, True), digest)
+        with self.assertRaises(ValueError):
+            ArtifactDigest("artifact.bin", 1, cast(Any, 123))
+
+    def test_manifest_rejects_non_integer_seed_types(self) -> None:
+        for invalid_seed in (
+            cast(Any, 1.5),
+            cast(Any, "1"),
+            cast(Any, True),
+        ):
+            with self.subTest(seed=invalid_seed):
+                with self.assertRaises(ValueError):
+                    ExperimentManifest.from_parts(
+                        seed=invalid_seed,
+                        parameters={},
+                        inputs={},
+                        outputs={},
+                    )
+
+    def test_manifest_rejects_mutable_or_non_scalar_parameters(self) -> None:
+        mutable_list = cast(Any, ["mutable"])
+        mutable_dict = cast(Any, {"mutable": True})
+
+        for invalid_value in (mutable_list, mutable_dict):
+            with self.subTest(value=invalid_value):
+                with self.assertRaises(ValueError):
+                    ExperimentManifest(
+                        seed=1,
+                        parameters=(("bad", invalid_value),),
+                        inputs=(),
+                        outputs=(),
+                    )
+
+    def test_manifest_rejects_non_string_parameter_names(self) -> None:
+        with self.assertRaises(ValueError):
+            ExperimentManifest(
+                seed=1,
+                parameters=((cast(Any, 123), "value"),),
+                inputs=(),
+                outputs=(),
+            )
+
+    def test_manifest_accepts_all_documented_scalar_parameter_types(self) -> None:
+        manifest = ExperimentManifest.from_parts(
+            seed=1,
+            parameters={
+                "string": "value",
+                "integer": 2,
+                "float": 2.5,
+                "boolean": True,
+                "null": None,
+            },
+            inputs={},
+            outputs={},
+        )
+        self.assertEqual(
+            dict(manifest.parameters),
+            {
+                "boolean": True,
+                "float": 2.5,
+                "integer": 2,
+                "null": None,
+                "string": "value",
+            },
         )
 
     def test_manifest_rejects_non_finite_float_parameters(self) -> None:
