@@ -23,9 +23,9 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         return cast(dict[str, Any], raw)
 
     def load_validator_namespace(self) -> dict[str, Any]:
-        return cast(
-            dict[str, Any],
-            runpy.run_path(str(VALIDATOR_PATH), run_name="claim_validator_test"),
+        return runpy.run_path(
+            str(VALIDATOR_PATH),
+            run_name="claim_validator_test",
         )
 
     def test_validator_accepts_reviewed_ledger(self) -> None:
