@@ -20,11 +20,15 @@ class ArtifactDigest:
     sha256: str
 
     def __post_init__(self) -> None:
-        if not self.name:
-            raise ValueError("artifact name must not be empty")
-        if self.size < 0:
-            raise ValueError("artifact size must be non-negative")
-        if len(self.sha256) != 64 or any(
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("artifact name must be a non-empty string")
+        if (
+            not isinstance(self.size, int)
+            or isinstance(self.size, bool)
+            or self.size < 0
+        ):
+            raise ValueError("artifact size must be a non-negative integer")
+        if not isinstance(self.sha256, str) or len(self.sha256) != 64 or any(
             char not in "0123456789abcdef" for char in self.sha256
         ):
             raise ValueError("artifact SHA-256 must be 64 lowercase hex characters")
@@ -53,16 +57,26 @@ class ExperimentManifest:
     )
 
     def __post_init__(self) -> None:
-        if isinstance(self.seed, bool) or self.seed < 0:
+        if (
+            not isinstance(self.seed, int)
+            or isinstance(self.seed, bool)
+            or self.seed < 0
+        ):
             raise ValueError("seed must be a non-negative integer")
 
         parameter_names = [name for name, _value in self.parameters]
-        if any(not name for name in parameter_names):
-            raise ValueError("parameter names must not be empty")
+        if any(not isinstance(name, str) or not name for name in parameter_names):
+            raise ValueError("parameter names must be non-empty strings")
         if len(set(parameter_names)) != len(parameter_names):
             raise ValueError("parameter names must be unique")
 
+        supported_scalar_types = (str, int, float, bool, type(None))
         for _name, value in self.parameters:
+            if type(value) not in supported_scalar_types:
+                raise ValueError(
+                    "manifest parameters must be scalar "
+                    "(str, int, float, bool, or null)"
+                )
             if isinstance(value, float) and not math.isfinite(value):
                 raise ValueError("manifest float parameters must be finite")
 
