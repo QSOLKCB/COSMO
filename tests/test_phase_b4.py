@@ -1,11 +1,15 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from typing import Any, cast
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
+
+import cosmo_core.triadic as triadic_module
 
 from cosmo_core import (
     LATTICE_SIZE,
@@ -27,6 +31,7 @@ from cosmo_core import (
     loop_closure,
     neighbor_indices_reference,
     recover_lattice,
+    runtime_cpu_capacity,
     state_entropy,
     step_parallel,
     step_scalar,
@@ -202,6 +207,58 @@ class BoundedParallelTests(unittest.TestCase):
                 mask=mask,
             ).lattice
             self.assertEqual(parallel, scalar)
+
+    def test_cgroup_v2_quota_caps_default_worker_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_directory:
+            root = Path(temp_directory)
+            (root / "cpu.max").write_text(
+                "200000 100000\n",
+                encoding="utf-8",
+            )
+            proc_cgroup = root / "proc-self-cgroup"
+            proc_cgroup.write_text("0::/\n", encoding="utf-8")
+
+            self.assertEqual(
+                triadic_module._cgroup_cpu_capacity(
+                    cgroup_root=root,
+                    proc_cgroup=proc_cgroup,
+                ),
+                2,
+            )
+
+        with (
+            patch("cosmo_core.triadic.os.cpu_count", return_value=3),
+            patch(
+                "cosmo_core.triadic._affinity_cpu_capacity",
+                return_value=3,
+            ),
+            patch(
+                "cosmo_core.triadic._cgroup_cpu_capacity",
+                return_value=2,
+            ),
+        ):
+            result = step_parallel(
+                TriadicLattice.zero(),
+                requested_workers=32,
+            )
+
+        self.assertEqual(result.host_logical_cpus, 3)
+        self.assertEqual(result.worker_capacity, 2)
+        self.assertEqual(result.effective_workers, 2)
+
+    def test_runtime_capacity_respects_process_affinity(self) -> None:
+        with (
+            patch("cosmo_core.triadic.os.cpu_count", return_value=8),
+            patch(
+                "cosmo_core.triadic._affinity_cpu_capacity",
+                return_value=2,
+            ),
+            patch(
+                "cosmo_core.triadic._cgroup_cpu_capacity",
+                return_value=None,
+            ),
+        ):
+            self.assertEqual(runtime_cpu_capacity(), 2)
 
     def test_worker_capacity_can_only_reduce_parallelism(self) -> None:
         result = step_parallel(
