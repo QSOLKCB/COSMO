@@ -21,10 +21,10 @@ from typing import TypedDict
 from cosmo_core import (
     BYTE_LABELS,
     CUNEIFORM_TABLE,
-    DECLARED_SYMBOLIC_INVARIANT,
+    DECLARED_SYMBOLIC_INVARIANT as DECLARED_SYMBOLIC_INVARIANT,
     DRAGON_SEED,
     GOLDEN_RATIO,
-    PENTAGON_SEED,
+    PENTAGON_SEED as PENTAGON_SEED,
     lucas,
     payload_bit_length,
     payload_byte_sum,
