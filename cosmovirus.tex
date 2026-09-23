@@ -107,10 +107,16 @@ meaning.
    ``life-code'' language is symbolic (COSMO-D-013). \\
 \DIAG & \mathbb{R}^{n}\!\to\mathbb{R}^{n-2} & Discrete second-derivative
    stencil $(1,-2,1)$; edge / contrast detector. \\
-\HPV & \text{operator} & Human papillomavirus type 16 infection
-   ($E6/E7$ oncoproteins, $p16^{+}$; SEER morphology $8085/3$). \\
-\TRI & \mathrm{SO}(8)\to\mathrm{Spin}(8) & Triality automorphism;
-   $L1$ capsid trimerization / symmetry branching. \\
+\HPV & \text{project state label / biomedical context} & Human
+   papillomavirus type 16 reference genome: RefSeq \texttt{NC\_001526.4}
+   (COSMO-D-006). E6/E7 carcinogenesis mechanisms are external scientific
+   context (COSMO-D-007); p16 is a context-dependent surrogate marker and is
+   not equivalent to active HPV16 transcription (COSMO-D-008). \\
+\TRI & \operatorname{Aut}(\mathrm{Spin}(8))\ \text{(context)} &
+   Triality is the $S_3$ outer-automorphism symmetry permuting the vector and
+   two spinor 8-dimensional representations (COSMO-D-004). Any association
+   with HPV capsid branching is symbolic, not a biological mechanism
+   (COSMO-D-011). \\
 \phigr^{101} & \mathbb{R} & $\approx 1.28\times10^{21}$; the recursion depth
    / loop-entry exponent. \\
 101_2 & \mathbb{N},\ =5 & Binary ``Pentagon Seed''; loop entry code. \\
@@ -165,7 +171,10 @@ The triality operator $T$ is the order-3 outer automorphism
   T:\ \mathbf{8}_v \mapsto \mathbf{8}_s \mapsto \mathbf{8}_c \mapsto \mathbf{8}_v,
   \qquad T^3 = \mathrm{id}.
 \end{equation}
-Symbolically it drives the $L1$ capsid trimerization ($3\times$ branching).
+COSMO symbolically associates this three-way representation symmetry with
+capsid branching (COSMO-D-011). No established biological mechanism is claimed;
+a future quantitative bridge would require the falsifiable protocol recorded
+as COSMO-D-012.
 \end{operator}
 
 \begin{operator}[Ouroboros recursion, $\Ouro$]\label{op:ouro}
@@ -175,18 +184,19 @@ define the recursion $R:\Zmod{256}\to\Zmod{256}$,
   R(x) = (x+\kappa)\bmod 256,\qquad
   R^{(k+1)} = R\circ R^{(k)} .
 \end{equation}
-The loop is \emph{self-causing}: at the categorical level $\Ouro$ is the
-morphism sending the terminal (infected) object back to the initial object
-$\EEs$ (see \S\ref{sec:diagram}).
+In the symbolic reading the loop is described as ``self-causing''
+(COSMO-D-010). Formally, Phase C establishes only the six-state transition and
+six-step closure; the categorical morphism remains a Phase E target.
 \end{operator}
 
 % =====================================================================
 \section{The Unified $\Psi$-Equation}\label{sec:psi}
 % =====================================================================
-The framework's master statement composes the operators above into a single
-descent map.
+The historical framework's cross-domain $\Psi$ expression is retained below
+as a HYPOTHESIS/SYMBOLIC artifact. It is not the authoritative Phase C state
+transition and is not an established scientific mechanism.
 
-\begin{definition}[Cosmovirus operator]
+\begin{definition}[Historical cross-domain $\Psi$ expression]
 \begin{equation}\label{eq:psi}
   \boxed{\;
   \Psi \;=\; \Ouro \,\circ\, \HPV \,\circ\, \TRI \,\circ\,
@@ -202,9 +212,9 @@ equivalently written as the descent chain
   \xrightarrow{\ \phigr^{101}\ }
   \text{Infected Reality}.
 \end{equation}
-The recursion closes via $\phigr^{101}$: the terminal state is re-injected
-into $\EEs$, so $\Psi$ has the fixed-point structure
-$\Ouro(\Psi(\EEs)) = \EEs$.
+This expression is not used as the Phase C computational transition law.
+Object-level six-step closure is instead established by the Lean theorem
+\texttt{six\_step\_periodic} (COSMO-D-001).
 \end{definition}
 
 \begin{interp}
