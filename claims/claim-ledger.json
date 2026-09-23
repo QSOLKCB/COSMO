@@ -228,7 +228,8 @@
       ],
       "sources": [],
       "falsification": null,
-      "boundary": "They are not a decipherment, transliteration, translation, archaeological attribution, or historical sentence."
+      "boundary": "They are not a decipherment, transliteration, translation, archaeological attribution, or historical sentence.",
+      "empirical_status": "NON_EMPIRICAL"
     },
     {
       "id": "COSMO-D-010",
@@ -244,7 +245,8 @@
       ],
       "sources": [],
       "falsification": null,
-      "boundary": "These phrases are not empirical cosmology, materials science, virology, or causal-mechanism claims."
+      "boundary": "These phrases are not empirical cosmology, materials science, virology, or causal-mechanism claims.",
+      "empirical_status": "NON_EMPIRICAL"
     },
     {
       "id": "COSMO-D-011",
@@ -260,7 +262,8 @@
       ],
       "sources": [],
       "falsification": null,
-      "boundary": "The repository does not claim an established biological mechanism connecting Spin(8) triality to HPV capsid assembly."
+      "boundary": "The repository does not claim an established biological mechanism connecting Spin(8) triality to HPV capsid assembly.",
+      "empirical_status": "NON_EMPIRICAL"
     },
     {
       "id": "COSMO-D-012",
@@ -294,7 +297,8 @@
         "SRC-SIS2-PMID-25590815"
       ],
       "falsification": null,
-      "boundary": "The scientific source does not establish a biological substrate role; it supports SiS2 crystal-structure facts only."
+      "boundary": "The scientific source does not establish a biological substrate role; it supports SiS2 crystal-structure facts only.",
+      "empirical_status": "NON_EMPIRICAL"
     },
     {
       "id": "COSMO-D-014",
