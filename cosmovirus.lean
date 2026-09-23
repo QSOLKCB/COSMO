@@ -114,31 +114,31 @@ inductive CosmoLayer where
   | PhiScaled
   | SiS2Substrate
   | TrialityBranch
-  | HPV16Infected
+  | HPV16Layer
   | OuroborosLoop
   deriving Repr, DecidableEq
 
 open CosmoLayer
 
-/-- Legacy project transition: E8 label to phi-scaled label. -/
+/-- Legacy helper retained for compatibility; it is not the Phase C authority. -/
 def sclProjection : CosmoLayer → CosmoLayer
   | E8Symmetry => PhiScaled
   | other => other
 
-/-- Legacy project transition used by the current four-function Ψ composition. -/
+/-- Legacy helper retained for compatibility; it is not the Phase C authority. -/
 def trialityRotation : CosmoLayer → CosmoLayer
   | PhiScaled => SiS2Substrate
   | SiS2Substrate => TrialityBranch
   | other => other
 
-/-- Legacy project transition into the HPV16-labelled state. -/
+/-- Legacy helper retained for compatibility; it is not the Phase C authority. -/
 def infection : CosmoLayer → CosmoLayer
-  | TrialityBranch => HPV16Infected
+  | TrialityBranch => HPV16Layer
   | other => other
 
-/-- Legacy loop transition. -/
+/-- Legacy helper retained for compatibility; it is not the Phase C authority. -/
 def ouroboros : CosmoLayer → CosmoLayer
-  | HPV16Infected => OuroborosLoop
+  | HPV16Layer => OuroborosLoop
   | OuroborosLoop => E8Symmetry
   | other => other
 
@@ -195,29 +195,104 @@ def cuneiformAnnotation (i : Fin 8) : String :=
   | 7 => "UR"
   | _ => "?"
 
-/-! ## 5. Legacy Ψ composition -/
+/-! ## 5. Authoritative six-state COSMO dynamics -/
 
 /--
-Current legacy Ψ implementation.  This is a finite-state transition function,
-not yet the six-generator categorical cycle described in the companion paper.
-PR C will reconstruct that architecture explicitly.
+The single authoritative one-step transition for Phase C.
+
+The constructor names are project vocabulary only.  This transition function
+formalizes the discrete cycle, not the scientific objects suggested by labels.
+-/
+def cosmoStep : CosmoLayer → CosmoLayer
+  | E8Symmetry => PhiScaled
+  | PhiScaled => SiS2Substrate
+  | SiS2Substrate => TrialityBranch
+  | TrialityBranch => HPV16Layer
+  | HPV16Layer => OuroborosLoop
+  | OuroborosLoop => E8Symmetry
+
+/--
+Compatibility-facing name retained from the baseline.  From Phase C onward,
+Psi is exactly one application of the authoritative six-state transition.
 -/
 def psiEquation (layer : CosmoLayer) : CosmoLayer :=
-  ouroboros (infection (trialityRotation (sclProjection layer)))
+  cosmoStep layer
 
+/-- Iterate the authoritative transition exactly n times. -/
 def psiIterate : Nat → CosmoLayer → CosmoLayer
   | 0, l => l
-  | n + 1, l => psiIterate n (psiEquation l)
+  | n + 1, l => psiIterate n (cosmoStep l)
 
-/-- The loop-labelled state maps back to the E8-labelled state by definition. -/
-theorem ouroboros_loop_back : ouroboros OuroborosLoop = E8Symmetry := by
+/-- Typed evidence for the six and only six allowed one-step transitions. -/
+inductive Transition : CosmoLayer → CosmoLayer → Prop where
+  | e8ToPhi : Transition E8Symmetry PhiScaled
+  | phiToSubstrate : Transition PhiScaled SiS2Substrate
+  | substrateToTriality : Transition SiS2Substrate TrialityBranch
+  | trialityToHPV16 : Transition TrialityBranch HPV16Layer
+  | hpv16ToOuroboros : Transition HPV16Layer OuroborosLoop
+  | ouroborosToE8 : Transition OuroborosLoop E8Symmetry
+
+/-- Every authoritative one-step computation has a typed transition witness. -/
+theorem transition_witness (layer : CosmoLayer) :
+    Transition layer (cosmoStep layer) := by
+  cases layer with
+  | E8Symmetry => exact Transition.e8ToPhi
+  | PhiScaled => exact Transition.phiToSubstrate
+  | SiS2Substrate => exact Transition.substrateToTriality
+  | TrialityBranch => exact Transition.trialityToHPV16
+  | HPV16Layer => exact Transition.hpv16ToOuroboros
+  | OuroborosLoop => exact Transition.ouroborosToE8
+
+/-- Six authoritative steps return every state to itself. -/
+theorem six_step_periodic (layer : CosmoLayer) :
+    psiIterate 6 layer = layer := by
+  cases layer <;> rfl
+
+/-- No state closes early after one through five positive steps. -/
+theorem first_five_not_periodic (layer : CosmoLayer) :
+    psiIterate 1 layer ≠ layer ∧
+    psiIterate 2 layer ≠ layer ∧
+    psiIterate 3 layer ≠ layer ∧
+    psiIterate 4 layer ≠ layer ∧
+    psiIterate 5 layer ≠ layer := by
+  cases layer <;> decide
+
+/-- Reachability inside one complete six-state orbit. -/
+def ReachesWithinCycle (source target : CosmoLayer) : Prop :=
+  psiIterate 0 source = target ∨
+  psiIterate 1 source = target ∨
+  psiIterate 2 source = target ∨
+  psiIterate 3 source = target ∨
+  psiIterate 4 source = target ∨
+  psiIterate 5 source = target
+
+/-- Every state reaches every other state within one complete six-state orbit. -/
+theorem every_layer_reachable (source target : CosmoLayer) :
+    ReachesWithinCycle source target := by
+  cases source <;> cases target <;>
+    simp [ReachesWithinCycle, psiIterate, cosmoStep]
+
+/-- Canonical roadmap order for one complete orbit from E8Symmetry. -/
+def canonicalOrbit : List CosmoLayer :=
+  [E8Symmetry, PhiScaled, SiS2Substrate, TrialityBranch, HPV16Layer, OuroborosLoop]
+
+theorem canonical_orbit_matches_iterates :
+    canonicalOrbit =
+      List.ofFn (fun n : Fin 6 => psiIterate n.val E8Symmetry) := by
+  decide
+
+theorem canonical_orbit_nodup : canonicalOrbit.Nodup := by
+  decide
+
+/-- The loop-labelled state advances back to the E8-labelled state. -/
+theorem ouroboros_loop_back : cosmoStep OuroborosLoop = E8Symmetry := by
   rfl
 
-/-- The HPV16-labelled state maps into the loop-labelled state by definition. -/
-theorem infected_enters_loop : ouroboros HPV16Infected = OuroborosLoop := by
+/-- The HPV16-labelled state advances into the loop-labelled state. -/
+theorem hpv16_enters_loop : cosmoStep HPV16Layer = OuroborosLoop := by
   rfl
 
-/-- The scaling transition is identity outside the E8-labelled constructor. -/
+/-- The legacy scaling helper remains identity outside E8Symmetry. -/
 theorem scl_idempotent (l : CosmoLayer) (h : l ≠ E8Symmetry) :
     sclProjection l = l := by
   cases l <;> first | rfl | exact absurd rfl h
