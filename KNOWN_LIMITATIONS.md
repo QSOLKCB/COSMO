@@ -35,10 +35,13 @@ This file is part of COSMO's trust boundary. A green build means the checked cod
 
 ## Deterministic codec boundary
 
-- Phase B2's extended Hamming SECDED codec uses independent `(8, 4, 4)` codewords. It corrects one flipped bit per codeword and detects every two-bit error per codeword; it makes no correction/detection guarantee for higher-weight corruption.
-- The strict `A/C/G/T` mapping is a deterministic storage alphabet, not a biological model or claim about DNA synthesis, sequencing, mutation, or error rates.
-- Phase B2 provides reusable ECC and DNA primitives only. The full `cube -> bytes -> ECC -> ACGT -> corruption -> ECC correction -> bytes -> cube` storage contract remains Phase B5 work.
-- Experiment manifests bind the exact bytes supplied to the manifest constructor. They do not independently authenticate the external provenance or scientific validity of those bytes.
+- Phase B5 closes the computational `cube -> bytes -> ECC -> ACGT -> corruption -> ECC correction -> bytes -> cube` contract for the Phase B4 `TriadicLattice`. The cube serialization is one byte per ternary cell and is a software storage representation, not a physical Rubik's Cube encoding claim.
+- The extended Hamming SECDED codec uses independent `(8, 4, 4)` codewords. It corrects one flipped bit per codeword and detects every two-bit error per codeword; it makes no correction/detection guarantee for higher-weight corruption.
+- SHA-256 is an integrity/authentication layer, not ECC. It can reject a higher-weight corruption that SECDED miscorrrects into the wrong payload, but it does not make that corruption correctable.
+- The strict `A/C/G/T` mapping and synthetic FASTA output are deterministic storage alphabets/containers only. They are not biological models or claims about DNA synthesis, sequencing, mutation, storage density, or laboratory error rates.
+- B5's corruption helpers model exact encoded-bit flips while preserving valid ACGT text. They do not claim that physical DNA base substitutions have the same bit-error distribution.
+- MIDI/audio visualization remains outside the deterministic storage core.
+- Experiment manifests and storage receipts bind the exact bytes supplied or recovered. They do not independently authenticate external provenance or scientific validity.
 
 ## Scientific interpretation
 
