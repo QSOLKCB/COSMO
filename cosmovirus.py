@@ -29,7 +29,6 @@ from cosmo_core import (
     payload_bit_length,
     payload_byte_sum,
     phi_floor_integer,
-    phi_floor_modulo,
     phi_power_approx,
     second_difference,
 )
@@ -74,8 +73,10 @@ class CosmoBit101:
 
     @classmethod
     def phi_floor_modulo(cls, n: int, mod: int = 256) -> int:
-        """Return ``floor(phi**n) % mod`` using exact integer arithmetic."""
-        return phi_floor_modulo(n, mod)
+        """Return ``floor(phi**n) % mod`` while preserving subclass dispatch."""
+        if mod <= 0:
+            raise ValueError("modulus must be positive")
+        return cls.phi_floor_integer(n) % mod
 
     def declared_symbolic_invariant(self) -> int:
         """Return the project-declared symbolic invariant ``1621``."""
