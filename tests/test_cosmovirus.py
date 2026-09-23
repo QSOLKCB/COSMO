@@ -1,4 +1,10 @@
+import sys
 import unittest
+from pathlib import Path
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from cosmovirus import CosmoBit101, DECLARED_SYMBOLIC_INVARIANT
 

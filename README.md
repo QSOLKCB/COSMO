@@ -112,8 +112,11 @@ The runtime module has no third-party dependency.
 
 ```bash
 python -m unittest discover -s tests -v
+(cd tests && python test_cosmovirus.py)
 python -m compileall -q cosmovirus.py tests
 ```
+
+The direct test invocation is supported as well as discovery, so the regression suite can be run from inside the `tests/` directory without installing COSMO as a package.
 
 For the CI-equivalent static check:
 
