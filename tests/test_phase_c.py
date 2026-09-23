@@ -118,7 +118,7 @@ class AuthoritativeCosmoDynamicsTests(unittest.TestCase):
 
         path = transition_path(CosmoState.E8Symmetry, 6)
         self.assertEqual(path, witnesses)
-        for left, right in zip(path, path[1:], strict=True):
+        for left, right in zip(path, path[1:]):
             self.assertIs(left.target, right.source)
         self.assertIs(path[-1].target, CosmoState.E8Symmetry)
 
