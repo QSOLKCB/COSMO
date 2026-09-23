@@ -31,6 +31,16 @@ class CosmovirusCoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.cosmo.phi_floor_modulo(101, 0)
 
+    def test_phi_floor_modulo_preserves_subclass_dispatch(self) -> None:
+        class OverrideCosmo(CosmoBit101):
+            @classmethod
+            def phi_floor_integer(cls, n: int) -> int:
+                return 100 + n
+
+        self.assertEqual(OverrideCosmo.phi_floor_modulo(2, 7), 4)
+        with self.assertRaises(ValueError):
+            OverrideCosmo.phi_floor_modulo(2, 0)
+
     def test_payload_size_and_sum(self) -> None:
         self.assertEqual(len(self.cosmo.strand), 8)
         self.assertEqual(self.cosmo.payload_bit_length(), 64)
