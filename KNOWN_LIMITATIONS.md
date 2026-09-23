@@ -16,6 +16,13 @@ This file is part of COSMO's trust boundary. A green build means the checked cod
 - The value 1621 is not derived from the payload and is therefore not a checksum. It is retained as a declared symbolic invariant.
 - Cuneiform strings are project-defined symbolic annotations. They are not a formal decipherment or historical transliteration result.
 
+## Deterministic codec boundary
+
+- Phase B2's extended Hamming SECDED codec uses independent `(8, 4, 4)` codewords. It corrects one flipped bit per codeword and detects every two-bit error per codeword; it makes no correction/detection guarantee for higher-weight corruption.
+- The strict `A/C/G/T` mapping is a deterministic storage alphabet, not a biological model or claim about DNA synthesis, sequencing, mutation, or error rates.
+- Phase B2 provides reusable ECC and DNA primitives only. The full `cube -> bytes -> ECC -> ACGT -> corruption -> ECC correction -> bytes -> cube` storage contract remains Phase B5 work.
+- Experiment manifests bind the exact bytes supplied to the manifest constructor. They do not independently authenticate the external provenance or scientific validity of those bytes.
+
 ## Scientific interpretation
 
 - Formal verification establishes implications inside the model, not correspondence between model labels and the physical world.

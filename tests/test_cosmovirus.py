@@ -31,6 +31,16 @@ class CosmovirusCoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.cosmo.phi_floor_modulo(101, 0)
 
+    def test_phi_floor_modulo_preserves_subclass_dispatch(self) -> None:
+        class OverrideCosmo(CosmoBit101):
+            @classmethod
+            def phi_floor_integer(cls, n: int) -> int:
+                return 100 + n
+
+        self.assertEqual(OverrideCosmo.phi_floor_modulo(2, 7), 4)
+        with self.assertRaises(ValueError):
+            OverrideCosmo.phi_floor_modulo(2, 0)
+
     def test_payload_size_and_sum(self) -> None:
         self.assertEqual(len(self.cosmo.strand), 8)
         self.assertEqual(self.cosmo.payload_bit_length(), 64)
@@ -43,6 +53,12 @@ class CosmovirusCoreTests(unittest.TestCase):
             self.cosmo.declared_symbolic_invariant(),
             self.cosmo.byte_sum(),
         )
+
+    def test_cuneiform_table_remains_instance_local_and_mutable(self) -> None:
+        other = CosmoBit101()
+        self.cosmo.cuneiform_table[0x00] = ("TEST", "compatibility")
+        self.assertEqual(self.cosmo.cuneiform_table[0x00][0], "TEST")
+        self.assertNotIn(0x00, other.cuneiform_table)
 
     def test_diag_annihilates_linear_ramp(self) -> None:
         self.assertEqual(

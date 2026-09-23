@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Deterministic computational core for the COSMO symbolic framework.
+"""Compatibility-facing executable mirror for the COSMO symbolic framework.
 
-This module intentionally separates executable arithmetic from the project's
-symbolic and interpretive layer.  The functions below establish only the
-computations they perform; they do not establish physical, biomedical,
-archaeological, or cosmological claims.
+The reusable deterministic arithmetic, payload, ECC, DNA, integrity, and
+manifest primitives live in :mod:`cosmo_core`. This module retains the
+historical ``CosmoBit101`` surface and demonstration entry point.
+
+The executable code establishes only the computations it performs; it does not
+establish physical, biomedical, archaeological, or cosmological claims.
 
 Author  : Cosmovirus Formalization Project
 License : MIT
@@ -16,9 +18,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TypedDict
 
-PHI: float = 1.618_033_988_749_894_848_204_586_834_365_638_117_720
-PENTAGON_SEED: int = 0b101  # 5
-DECLARED_SYMBOLIC_INVARIANT: int = 1621
+from cosmo_core import (
+    BYTE_LABELS,
+    CUNEIFORM_TABLE,
+    DECLARED_SYMBOLIC_INVARIANT as DECLARED_SYMBOLIC_INVARIANT,
+    DRAGON_SEED,
+    GOLDEN_RATIO,
+    PENTAGON_SEED as PENTAGON_SEED,
+    lucas,
+    payload_bit_length,
+    payload_byte_sum,
+    phi_floor_integer,
+    phi_power_approx,
+    second_difference,
+)
+
+PHI: float = GOLDEN_RATIO
 
 
 class DecodedByte(TypedDict):
@@ -34,96 +49,46 @@ class DecodedByte(TypedDict):
 
 @dataclass
 class CosmoBit101:
-    """Executable representation of the COSMO Dragon Seed payload.
+    """Executable representation of the COSMO Dragon Seed payload."""
 
-    The stored payload is exactly eight bytes (64 bits). ``101`` is retained as
-    a project mnemonic for the surrounding symbolic loop; it is not a claim
-    that this object stores 101 bits.
-    """
-
-    strand: bytes = field(
-        default_factory=lambda: bytes(
-            (0xB7, 0xBA, 0xBE, 0xFF, 0xD6, 0xE5, 0xAA, 0x55)
-        )
-    )
-
-    byte_labels: tuple[str, ...] = (
-        "AN",
-        "KI",
-        "EN.KI",
-        "DIGIR",
-        "SI.SI",
-        "E2",
-        "ZU",
-        "UR",
-    )
-
+    strand: bytes = DRAGON_SEED
+    byte_labels: tuple[str, ...] = BYTE_LABELS
     cuneiform_table: dict[int, tuple[str, str]] = field(
-        default_factory=lambda: {
-            0xB7: ("AN", "sky / heaven god"),
-            0xBA: ("KI", "earth"),
-            0xBE: ("EN.KI", "lord of the earth / waters"),
-            0xFF: ("DIGIR", "divine determinative marker"),
-            0xD6: ("SI.SI", "dragon seed"),
-            0xE5: ("E2", "house / temple"),
-            0xAA: ("ZU", "knowledge / to know"),
-            0x55: ("UR", "dog / watchman"),
-        }
+        default_factory=lambda: dict(CUNEIFORM_TABLE)
     )
 
     def phi_power(self, n: int) -> float:
         """Return the floating-point approximation ``PHI ** n``."""
-        return PHI**n
+        return phi_power_approx(n)
 
     @staticmethod
     def _lucas(n: int) -> int:
         """Return the n-th Lucas number for ``n >= 0``."""
-        if n < 0:
-            raise ValueError("Lucas index must be non-negative")
-        a, b = 2, 1
-        for _ in range(n):
-            a, b = b, a + b
-        return a
+        return lucas(n)
 
     @classmethod
     def phi_floor_integer(cls, n: int) -> int:
-        """Return ``floor(phi**n)`` for a non-negative integer exponent.
-
-        The implementation uses the exact Lucas-number parity identity:
-
-        * n = 0: floor(phi^0) = 1
-        * odd n > 0: floor(phi^n) = L_n
-        * even n > 0: floor(phi^n) = L_n - 1
-        """
-        if n < 0:
-            raise ValueError("phi_floor_integer requires n >= 0")
-        if n == 0:
-            return 1
-        lucas = cls._lucas(n)
-        return lucas if n % 2 == 1 else lucas - 1
+        """Return ``floor(phi**n)`` for a non-negative integer exponent."""
+        return phi_floor_integer(n)
 
     @classmethod
     def phi_floor_modulo(cls, n: int, mod: int = 256) -> int:
-        """Return ``floor(phi**n) % mod`` using exact integer arithmetic."""
+        """Return ``floor(phi**n) % mod`` while preserving subclass dispatch."""
         if mod <= 0:
             raise ValueError("modulus must be positive")
         return cls.phi_floor_integer(n) % mod
 
     def declared_symbolic_invariant(self) -> int:
-        """Return the project-declared symbolic invariant ``1621``.
-
-        This value is intentionally not called a checksum because it is not
-        derived from the stored payload and therefore cannot detect mutation.
-        """
+        """Return the project-declared symbolic invariant ``1621``."""
         return DECLARED_SYMBOLIC_INVARIANT
 
     def byte_sum(self) -> int:
         """Return the arithmetic sum of the eight payload bytes."""
-        return sum(self.strand)
+        return payload_byte_sum(self.strand)
 
     def payload_bit_length(self) -> int:
         """Return the represented payload length in bits."""
-        return 8 * len(self.strand)
+        return payload_bit_length(self.strand)
 
     def cuneiform_lookup(self, byte_val: int) -> str:
         """Return the project-defined symbolic sign annotation for a byte."""
@@ -150,12 +115,7 @@ class CosmoBit101:
     @staticmethod
     def diag_operator(seq: list[float]) -> list[float]:
         """Apply the ``(1, -2, 1)`` discrete second-difference stencil."""
-        if len(seq) < 3:
-            raise ValueError("diag_operator requires at least 3 elements")
-        return [
-            seq[i - 1] - 2.0 * seq[i] + seq[i + 1]
-            for i in range(1, len(seq) - 1)
-        ]
+        return second_difference(seq)
 
     def ouroboros_iterate(self, n: int, start: int = PENTAGON_SEED) -> list[int]:
         """Iterate ``x[k+1] = x[k] + 75 (mod 256)`` for ``n`` steps."""
@@ -187,7 +147,6 @@ class CosmoBit101:
 
 def _demo() -> None:
     cosmo = CosmoBit101()
-
     print("=" * 66)
     print("  COSMO deterministic computational core")
     print("=" * 66)
