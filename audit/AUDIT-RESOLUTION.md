@@ -41,3 +41,15 @@ The following audit recommendations are valid work but would make the baseline P
 7. regeneration of all PDFs and graphical assets.
 
 Those remain downstream work. PR A exists to make subsequent changes land on a trustworthy, reproducible floor rather than continuing to build on ambiguous arithmetic and proof boundaries.
+
+## Post-baseline resolution
+
+Phase C resolves the deferred state-machine finding without rewriting the historical PR A disposition:
+
+- `cosmoStep` is now the single authoritative Lean one-step transition.
+- `psiEquation` is a compatibility alias for that one step rather than the legacy four-function composition.
+- the state vocabulary is exactly `E8Symmetry -> PhiScaled -> SiS2Substrate -> TrialityBranch -> HPV16Layer -> OuroborosLoop -> E8Symmetry`;
+- Lean proves six-step periodicity, no positive period below six, typed transition witnesses, canonical orbit identity, and all-to-all reachability within one cycle;
+- Python mirrors the same transition graph and exhaustively checks all source/target reachability pairs.
+
+The separate category-theory audit finding remains deferred to Phase E.
