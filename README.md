@@ -100,6 +100,25 @@ Phase B3 applies immutable QSOL OPT v1.0.0 record `OPT-INV-001` to the first exp
 
 The canonical Weyl-reflection order is exactly the canonical root order. No floating-point geometry is used by the B3 E8 core.
 
+## Phase B4 deterministic triadic lattice and recovery
+
+Phase B4 applies immutable QSOL OPT v1.0.0 records `OPT-PAR-001` and `OPT-INV-001` to a strictly computational 8×8×8 ternary lattice.
+
+`cosmo_core/triadic.py` provides:
+
+- immutable 512-cell states over `{0, 1, 2}`;
+- stateless SplitMix64-derived seeded initialization with replayable SHA-256 identity;
+- periodic six-neighbour synchronous local updates;
+- an uncached topology reference generator plus one immutable cached neighbour table;
+- optional base-3 digit-residue masks, explicitly treated as computational textures rather than physical/fractal claims;
+- exact loop-closure distance `D_n(x) = ||T^n(x) - x||^2`;
+- exact repeat/cycle detection plus normalized state-population entropy;
+- a generic ternary codebook/recovery protocol;
+- a concrete length-3 ternary repetition code with one-trit correction capability and explicit uncorrectable syndromes; and
+- full-lattice recovery receipts recording corrected blocks, uncorrectable blocks, syndromes, and discrete recovery passes.
+
+The scalar update is authoritative. The bounded parallel path reads only the immutable prior state, uses deterministic contiguous partitions, restores canonical cell order before output construction, caps workers against host capacity and a hard bound, and records requested, configured/effective, and actually observed worker-thread counts separately. Python threads are an execution mechanism only; this phase makes no multicore speedup claim.
+
 ## Repository map
 
 | Path | Purpose |
@@ -109,8 +128,9 @@ The canonical Weyl-reflection order is exactly the canonical root order. No floa
 | `CosmoTrust.lean` | Semantic environment audit, dependency-closure replay, and non-initializing protected runner |
 | `cosmo_core/` | Canonical deterministic Python arithmetic, payload, ECC, DNA, integrity, manifest, and exact E8/Weyl primitives |
 | `cosmo_core/e8.py` | Exact doubled-coordinate E8 roots, lattice predicates, canonical identity, and Weyl reflections |
+| `cosmo_core/triadic.py` | Deterministic 8×8×8 ternary lattice, bounded parallel updates, diagnostics, and recovery model |
 | `cosmovirus.py` | Compatibility-facing Python mirror backed by `cosmo_core` |
-| `tests/` | Python regression tests, including exhaustive small-domain B2 codec and B3 root/reflection checks |
+| `tests/` | Python regression tests covering B2 codecs, B3 roots/reflections, and B4 scalar/parallel/recovery invariants |
 | `scripts/check-lean-trust.sh` | Fast lexical preflight for forbidden Lean source constructs |
 | `scripts/prepare-lean-audit.py` | Frozen manifest, artifact, symlink, path-package, and import-layout validation |
 | `scripts/verify-lean-source-state.py` | Hardened Git dependency-source identity and source-cache receipt verification |
@@ -153,6 +173,7 @@ python -m unittest discover -s tests -v
 (cd tests && python test_cosmovirus.py)
 (cd tests && python test_phase_b2.py)
 (cd tests && python test_phase_b3.py)
+(cd tests && python test_phase_b4.py)
 python -m compileall -q cosmo_core cosmovirus.py tests
 ```
 
@@ -162,7 +183,7 @@ For the CI-equivalent static check:
 
 ```bash
 python -m pip install -r requirements-dev.txt
-mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py
+mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py tests/test_phase_b4.py
 ```
 
 ## Current design status
