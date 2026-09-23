@@ -457,9 +457,11 @@ jobs:
           (cd tests && python test_phase_b4.py)
           (cd tests && python test_phase_b5.py)
           (cd tests && python test_phase_c.py)
+          (cd tests && python test_phase_d.py)
+          python scripts/validate-claim-ledger.py
 
       - name: Static type check
-        run: mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py tests/test_phase_b4.py tests/test_phase_b5.py tests/test_phase_c.py
+        run: mypy --strict cosmo_core cosmovirus.py scripts/validate-claim-ledger.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py tests/test_phase_b4.py tests/test_phase_b5.py tests/test_phase_c.py tests/test_phase_d.py
 
       - name: Bytecode compile check
         run: python -m compileall -q cosmo_core cosmovirus.py tests
