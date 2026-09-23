@@ -246,7 +246,7 @@ def validate_e8_root_system(
         family is E8RootFamily.INTEGER for family in families
     )
     half_integer_count = sum(
-        family is E8RootFamily.HALF_INTEGER for families in families
+        family is E8RootFamily.HALF_INTEGER for family in families
     )
     if integer_count != E8_INTEGER_ROOT_COUNT:
         raise ValueError("unexpected E8 integer-family root count")
