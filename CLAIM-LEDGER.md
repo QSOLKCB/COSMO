@@ -129,7 +129,7 @@
 - **Sources:** SRC-HPV-P16-PMC8409095
 - **Boundary:** COSMO must not equate a generic p16-positive label with HPV16 infection or active viral transcription.
 - **Repository provenance:**
-  - `cosmovirus.tex` — `p16` (`documented_context`)
+  - `cosmovirus.tex` — `COSMO-D-008` (`documented_context`)
 
 ### COSMO-D-009 — SYMBOLIC
 
