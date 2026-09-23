@@ -37,7 +37,7 @@ This file is part of COSMO's trust boundary. A green build means the checked cod
 
 - Phase B5 closes the computational `cube -> bytes -> ECC -> ACGT -> corruption -> ECC correction -> bytes -> cube` contract for the Phase B4 `TriadicLattice`. The cube serialization is one byte per ternary cell and is a software storage representation, not a physical Rubik's Cube encoding claim.
 - The extended Hamming SECDED codec uses independent `(8, 4, 4)` codewords. It corrects one flipped bit per codeword and detects every two-bit error per codeword; it makes no correction/detection guarantee for higher-weight corruption.
-- SHA-256 is an integrity/authentication layer, not ECC. It can reject a higher-weight corruption that SECDED miscorrrects into the wrong payload, but it does not make that corruption correctable.
+- SHA-256 is an integrity/authentication layer, not ECC. It can reject a higher-weight corruption that SECDED miscorrects into the wrong payload, but it does not make that corruption correctable.
 - The strict `A/C/G/T` mapping and synthetic FASTA output are deterministic storage alphabets/containers only. They are not biological models or claims about DNA synthesis, sequencing, mutation, storage density, or laboratory error rates.
 - B5's corruption helpers model exact encoded-bit flips while preserving valid ACGT text. They do not claim that physical DNA base substitutions have the same bit-error distribution.
 - MIDI/audio visualization remains outside the deterministic storage core.
