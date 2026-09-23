@@ -117,7 +117,7 @@ Phase B4 applies immutable QSOL OPT v1.0.0 records `OPT-PAR-001` and `OPT-INV-00
 - a concrete length-3 ternary repetition code with one-trit correction capability and explicit uncorrectable syndromes; and
 - full-lattice recovery receipts recording corrected blocks, uncorrectable blocks, syndromes, and discrete recovery passes.
 
-The scalar update is authoritative. The bounded parallel path reads only the immutable prior state, uses deterministic contiguous partitions, restores canonical cell order before output construction, caps workers against host capacity and a hard bound, and records requested, configured/effective, and actually observed worker-thread counts separately. Python threads are an execution mechanism only; this phase makes no multicore speedup claim.
+The scalar update is authoritative. The bounded parallel path reads only the immutable prior state, uses deterministic contiguous partitions, restores canonical cell order before output construction, caps workers against conservative runtime capacity (host CPU count, process affinity, Linux cgroup quota when visible, and a hard bound), and records requested, configured/effective, and actually observed worker-thread counts separately. Python threads are an execution mechanism only; this phase makes no multicore speedup claim.
 
 ## Repository map
 
