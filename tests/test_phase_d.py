@@ -36,14 +36,16 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         )
 
     def test_scientific_claims_have_external_sources(self) -> None:
-        for claim in self.ledger["claims"]:
+        ledger = self.load_ledger()
+        for claim in ledger["claims"]:
             if claim["class"] == "SCIENTIFIC":
                 with self.subTest(claim=claim["id"]):
                     self.assertTrue(claim["sources"])
 
     def test_hypotheses_are_falsifiable_and_not_supported(self) -> None:
+        ledger = self.load_ledger()
         hypotheses = [
-            claim for claim in self.ledger["claims"]
+            claim for claim in ledger["claims"]
             if claim["class"] == "HYPOTHESIS"
         ]
         self.assertTrue(hypotheses)
@@ -53,21 +55,24 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 self.assertNotEqual(claim["status"], "SUPPORTED")
 
     def test_symbolic_claims_have_explicit_non_empirical_boundaries(self) -> None:
-        for claim in self.ledger["claims"]:
+        ledger = self.load_ledger()
+        for claim in ledger["claims"]:
             if claim["class"] == "SYMBOLIC":
                 with self.subTest(claim=claim["id"]):
                     self.assertIn("not", claim["boundary"].lower())
 
     def test_hpv16_reference_accession_is_versioned(self) -> None:
+        ledger = self.load_ledger()
         source = next(
-            source for source in self.ledger["sources"]
+            source for source in ledger["sources"]
             if source["id"] == "SRC-HPV16-REFSEQ"
         )
         self.assertEqual(source["identifiers"]["RefSeq"], "NC_001526.4")
 
     def test_sis2_source_has_stable_article_identifiers(self) -> None:
+        ledger = self.load_ledger()
         source = next(
-            source for source in self.ledger["sources"]
+            source for source in ledger["sources"]
             if source["id"] == "SRC-SIS2-PMID-25590815"
         )
         self.assertEqual(source["identifiers"]["PMID"], "25590815")
