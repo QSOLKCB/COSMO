@@ -16,12 +16,12 @@ A claim may have external context sources without changing its class. In particu
 
 ## Scientific source registry
 
-- **SRC-E8-MATHWORLD** — Wolfram MathWorld, *Gosset Polytope*; documents the 240 vertices/roots of the E8 root polytope.
+- **SRC-E8-MATHWORLD** — Wolfram MathWorld, *Gosset Polytope*; documents the 240 vertices/roots of the E8 root polytope. https://mathworld.wolfram.com/GossetPolytope.html
 - **SRC-SPIN8-PTEP-2021** — PTEP 2021 article; states the Spin(8) triality (S_3) outer automorphism and permutation of the three 8-dimensional representations.
-- **SRC-SIS2-PMID-25590815** — PMID **25590815**, DOI **10.1021/ic501825r**; describes ambient-pressure SiS2 as orthorhombic chains of distorted edge-sharing SiS4 tetrahedra.
-- **SRC-HPV16-REFSEQ** — NCBI RefSeq **NC_001526.4**, human papillomavirus type 16 complete genome.
-- **SRC-HPV16-E6E7-PMID-17645777** — PMID **17645777**, PMCID **PMC11158331**; review of high-risk HPV E6/E7 carcinogenesis mechanisms.
-- **SRC-HPV-P16-PMC8409095** — PMCID **PMC8409095**; review discussing p16 as a surrogate marker and its limitations relative to direct viral transcription evidence.
+- **SRC-SIS2-PMID-25590815** — PMID **25590815**, DOI **10.1021/ic501825r**; describes ambient-pressure SiS2 as orthorhombic chains of distorted edge-sharing SiS4 tetrahedra. https://pubmed.ncbi.nlm.nih.gov/25590815/
+- **SRC-HPV16-REFSEQ** — NCBI RefSeq **NC_001526.4**, human papillomavirus type 16 complete genome. https://www.ncbi.nlm.nih.gov/nuccore/NC_001526.4
+- **SRC-HPV16-E6E7-PMID-17645777** — PMID **17645777**, PMCID **PMC11158331**; review of high-risk HPV E6/E7 carcinogenesis mechanisms. https://pmc.ncbi.nlm.nih.gov/articles/PMC11158331/
+- **SRC-HPV-P16-PMC8409095** — PMCID **PMC8409095**; review discussing p16 as a surrogate marker and its limitations relative to direct viral transcription evidence. https://pmc.ncbi.nlm.nih.gov/articles/PMC8409095/
 
 ## Claims
 
