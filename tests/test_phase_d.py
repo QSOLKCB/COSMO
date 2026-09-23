@@ -1,8 +1,9 @@
-import importlib.util
 import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
+from typing import Any, cast
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
@@ -13,21 +14,22 @@ VALIDATOR_PATH = REPOSITORY_ROOT / "scripts" / "validate-claim-ledger.py"
 
 
 class PhaseDClaimLedgerTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.ledger = json.loads(LEDGER_PATH.read_text(encoding="utf-8"))
-        spec = importlib.util.spec_from_file_location("claim_validator", VALIDATOR_PATH)
-        if spec is None or spec.loader is None:
-            raise RuntimeError("cannot load claim-ledger validator")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        cls.validator = module
+    def load_ledger(self) -> dict[str, Any]:
+        raw: object = json.loads(LEDGER_PATH.read_text(encoding="utf-8"))
+        self.assertIsInstance(raw, dict)
+        return cast(dict[str, Any], raw)
 
     def test_validator_accepts_reviewed_ledger(self) -> None:
-        self.validator.validate()
+        completed = subprocess.run(
+            [sys.executable, str(VALIDATOR_PATH)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("claim ledger valid:", completed.stdout)
 
     def test_all_five_evidence_classes_are_present(self) -> None:
-        classes = {claim["class"] for claim in self.ledger["claims"]}
+        classes = {claim["class"] for claim in self.load_ledger()["claims"]}
         self.assertEqual(
             classes,
             {"FORMAL", "COMPUTATIONAL", "SCIENTIFIC", "HYPOTHESIS", "SYMBOLIC"},
