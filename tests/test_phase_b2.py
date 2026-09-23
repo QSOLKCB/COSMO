@@ -201,6 +201,47 @@ class ExperimentManifestTests(unittest.TestCase):
                         outputs={},
                     )
 
+    def test_manifest_rejects_mutable_collection_containers(self) -> None:
+        artifact = ArtifactDigest.from_bytes("x", b"x")
+
+        with self.assertRaises(ValueError):
+            ExperimentManifest(
+                seed=1,
+                parameters=(),
+                inputs=cast(Any, [artifact]),
+                outputs=(),
+            )
+        with self.assertRaises(ValueError):
+            ExperimentManifest(
+                seed=1,
+                parameters=(),
+                inputs=(),
+                outputs=cast(Any, [artifact]),
+            )
+        with self.assertRaises(ValueError):
+            ExperimentManifest(
+                seed=1,
+                parameters=cast(Any, [("mode", "reference")]),
+                inputs=(),
+                outputs=(),
+            )
+        with self.assertRaises(ValueError):
+            ExperimentManifest(
+                seed=1,
+                parameters=(cast(Any, ["mode", "reference"]),),
+                inputs=(),
+                outputs=(),
+            )
+
+    def test_manifest_rejects_non_artifact_collection_members(self) -> None:
+        with self.assertRaises(ValueError):
+            ExperimentManifest(
+                seed=1,
+                parameters=(),
+                inputs=(cast(Any, "not-an-artifact"),),
+                outputs=(),
+            )
+
     def test_manifest_rejects_mutable_or_non_scalar_parameters(self) -> None:
         mutable_list = cast(Any, ["mutable"])
         mutable_dict = cast(Any, {"mutable": True})
