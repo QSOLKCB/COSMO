@@ -14,6 +14,7 @@ from cosmo_core import (
     E8_ROOT_COUNT,
     E8_ROOT_TABLE_SHA256,
     E8RootFamily,
+    ScaledVector,
     canonical_e8_roots,
     canonical_weyl_reflections,
     dot_product,
@@ -134,7 +135,7 @@ class WeylReflectionTests(unittest.TestCase):
 
     def test_lattice_preservation_beyond_roots(self) -> None:
         roots = canonical_e8_roots()
-        samples = {(0,) * 8}
+        samples: set[ScaledVector] = {(0,) * 8}
         for left in roots[:24]:
             for right in roots[:24]:
                 samples.add(
