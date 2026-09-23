@@ -269,7 +269,8 @@ def ReachesWithinCycle (source target : CosmoLayer) : Prop :=
 /-- Every state reaches every other state within one complete six-state orbit. -/
 theorem every_layer_reachable (source target : CosmoLayer) :
     ReachesWithinCycle source target := by
-  cases source <;> cases target <;> decide
+  cases source <;> cases target <;>
+    simp [ReachesWithinCycle, psiIterate, cosmoStep]
 
 /-- Canonical roadmap order for one complete orbit from E8Symmetry. -/
 def canonicalOrbit : List CosmoLayer :=
