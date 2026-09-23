@@ -22,9 +22,14 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
     def test_validator_accepts_reviewed_ledger(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(VALIDATOR_PATH)],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
         )
         self.assertIn("claim ledger valid:", completed.stdout)
 
