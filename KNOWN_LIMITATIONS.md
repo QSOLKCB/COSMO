@@ -4,9 +4,10 @@ This file is part of COSMO's trust boundary. A green build means the checked cod
 
 ## Formal model
 
-- `CosmoLayer` is currently a six-constructor finite type. Phase B3 now provides an exact **Python computational** E8 root/Weyl model, but the `E8Symmetry` constructor is not yet linked to that model by a Lean theorem; SiS2, HPV16, and archaeological labels likewise remain names rather than formalized domain objects.
-- `psiEquation` is a legacy four-function composition. It does not match the six-generator category-theory cycle one-for-one. That reconstruction is intentionally deferred to PR C.
-- The category-theory paper is a design sketch. Its retract, natural-transformation, endofunctor, and periodicity claims are not yet Lean theorems.
+- Phase C makes `CosmoLayer` the authoritative six-state discrete cycle in Lean and mirrors it as `CosmoState` in Python. The proofs establish only finite-state transition, periodicity, and reachability properties; constructor names do not formalize the corresponding scientific objects.
+- `psiEquation` is no longer the legacy four-function composition. It is retained as a compatibility-facing name for exactly one application of the authoritative Lean `cosmoStep`.
+- Phase B3 provides an exact **Python computational** E8 root/Weyl model, but the `E8Symmetry` state is not yet linked to that model by a Lean theorem; SiS2 and HPV16 labels likewise remain project vocabulary rather than formalized domain objects.
+- The category-theory paper remains a design sketch. Phase C supplies the state-machine authority it must consume, but retract, natural-transformation, free-category, endofunctor, and categorical six-step equivalence claims remain Phase E work.
 - `phiFloorQuantized` encodes the Lucas parity rule used by the project. PR A proves the concrete integer results needed by the baseline, but does not yet formalize the real-analysis theorem relating the definition to `Real.floor` for every exponent.
 - `diagApplyFloat` is executable only. No theorem assumes unrestricted floating-point arithmetic behaves as an exact ring.
 
