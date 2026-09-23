@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
+from pathlib import Path
 from threading import get_ident
 from typing import Final, Protocol, TypeGuard, runtime_checkable
 
@@ -58,6 +59,153 @@ def _require_cells(cells: object, label: str = "cells") -> TriadicStateTuple:
     if any(not _is_plain_int(value) or value not in TRIADIC_STATES for value in cells):
         raise ValueError(f"{label} contains a non-ternary state")
     return cells
+
+
+def _quota_capacity(quota: int, period: int) -> int | None:
+    """Convert a cgroup CPU quota/period pair to whole-worker capacity."""
+    if quota < 0:
+        return None
+    if quota == 0 or period <= 0:
+        return 1
+    return max(1, quota // period)
+
+
+def _parse_cgroup_v2_cpu_max(text: str) -> int | None:
+    """Parse one cgroup-v2 cpu.max value conservatively."""
+    fields = text.split()
+    if len(fields) != 2:
+        return 1
+    quota_text, period_text = fields
+    if quota_text == "max":
+        try:
+            period = int(period_text)
+        except ValueError:
+            return 1
+        return None if period > 0 else 1
+    try:
+        quota = int(quota_text)
+        period = int(period_text)
+    except ValueError:
+        return 1
+    return _quota_capacity(quota, period)
+
+
+def _parse_proc_cgroup(text: str) -> tuple[str | None, str | None]:
+    """Return current-process v2 and v1-CPU cgroup paths."""
+    v2_path: str | None = None
+    v1_cpu_path: str | None = None
+    for line in text.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        hierarchy, controllers, path = parts
+        if hierarchy == "0" and controllers == "":
+            v2_path = path
+        elif "cpu" in controllers.split(","):
+            v1_cpu_path = path
+    return v2_path, v1_cpu_path
+
+
+def _ancestor_paths(root: Path, relative: str | None) -> tuple[Path, ...]:
+    """Return current cgroup directory and visible ancestors under root."""
+    if relative is None:
+        return (root,)
+    current = root.joinpath(*Path(relative).parts[1:])
+    try:
+        current.relative_to(root)
+    except ValueError:
+        return (root,)
+
+    paths: list[Path] = []
+    while True:
+        paths.append(current)
+        if current == root:
+            break
+        current = current.parent
+    return tuple(paths)
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+
+
+def _cgroup_cpu_capacity(
+    *,
+    cgroup_root: Path = Path("/sys/fs/cgroup"),
+    proc_cgroup: Path = Path("/proc/self/cgroup"),
+) -> int | None:
+    """Return the tightest visible Linux cgroup CPU quota, if any.
+
+    Both cgroup v2 and common cgroup v1 CPU-controller layouts are supported.
+    Hierarchical ancestors are checked because an unlimited child can still be
+    constrained by a parent quota.
+    """
+    proc_text = _read_text(proc_cgroup)
+    v2_relative, v1_relative = _parse_proc_cgroup(proc_text or "")
+
+    capacities: list[int] = []
+
+    for directory in _ancestor_paths(cgroup_root, v2_relative):
+        cpu_max = _read_text(directory / "cpu.max")
+        if cpu_max is None:
+            continue
+        parsed = _parse_cgroup_v2_cpu_max(cpu_max)
+        if parsed is not None:
+            capacities.append(parsed)
+
+    for controller_name in ("cpu", "cpu,cpuacct"):
+        controller_root = cgroup_root / controller_name
+        for directory in _ancestor_paths(controller_root, v1_relative):
+            quota_text = _read_text(directory / "cpu.cfs_quota_us")
+            period_text = _read_text(directory / "cpu.cfs_period_us")
+            if quota_text is None or period_text is None:
+                continue
+            try:
+                quota = int(quota_text.strip())
+                period = int(period_text.strip())
+            except ValueError:
+                capacities.append(1)
+                continue
+            parsed = _quota_capacity(quota, period)
+            if parsed is not None:
+                capacities.append(parsed)
+
+    return min(capacities) if capacities else None
+
+
+def _affinity_cpu_capacity() -> int | None:
+    """Return the process CPU-affinity capacity when the platform exposes it."""
+    get_affinity = getattr(os, "sched_getaffinity", None)
+    if get_affinity is None:
+        return None
+    try:
+        capacity = len(get_affinity(0))
+    except (OSError, TypeError):
+        return None
+    return max(1, capacity)
+
+
+def runtime_cpu_capacity() -> int:
+    """Return conservative worker capacity for the current runtime.
+
+    Capacity is bounded by host-visible CPUs, process affinity, Linux cgroup
+    quota when available, and COSMO's hard worker limit.
+    """
+    host_cpus = os.cpu_count() or 1
+    capacities = [host_cpus, MAX_PARALLEL_WORKERS]
+
+    affinity_capacity = _affinity_cpu_capacity()
+    if affinity_capacity is not None:
+        capacities.append(affinity_capacity)
+
+    quota_capacity = _cgroup_cpu_capacity()
+    if quota_capacity is not None:
+        capacities.append(quota_capacity)
+
+    return max(1, min(capacities))
 
 
 def _splitmix64(value: int) -> int:
@@ -446,7 +594,7 @@ def _worker_capacity(
         raise ValueError("requested_workers must be a positive integer")
 
     host_cpus = os.cpu_count() or 1
-    configured_capacity = min(host_cpus, MAX_PARALLEL_WORKERS)
+    configured_capacity = runtime_cpu_capacity()
     if worker_capacity is not None:
         if not _is_plain_int(worker_capacity) or worker_capacity <= 0:
             raise ValueError("worker_capacity must be a positive integer")
