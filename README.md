@@ -119,6 +119,30 @@ Phase B4 applies immutable QSOL OPT v1.0.0 records `OPT-PAR-001` and `OPT-INV-00
 
 The scalar update is authoritative. The bounded parallel path reads only the immutable prior state, uses deterministic contiguous partitions, restores canonical cell order before output construction, caps workers against conservative runtime capacity (host CPU count, process affinity, Linux cgroup quota when visible, and a hard bound), and records requested, configured/effective, and actually observed worker-thread counts separately. Python threads are an execution mechanism only; this phase makes no multicore speedup claim.
 
+## Phase B5 storage / DNA / ECC round-trip contract
+
+Phase B5 applies immutable QSOL OPT v1.0.0 records `OPT-PY-001` and `OPT-INV-001` to the storage path and closes the roadmap invariant:
+
+`cube -> bytes -> ECC -> ACGT -> corruption -> ECC correction -> bytes -> cube`
+
+The authoritative cube is the Phase B4 `TriadicLattice`. Its 512 cells serialize canonically as 512 bytes, one byte per ternary state `0/1/2`. `cosmo_core/storage.py` then composes the already-validated B2 primitives:
+
+- extended Hamming SECDED `(8,4,4)`, two codewords per payload byte;
+- strict uppercase `A/C/G/T` conversion with no normalization or coercion;
+- exact encoded-bit corruption applied while retaining valid ACGT representation;
+- SHA-256 binding of source payload, clean ECC bytes, and clean DNA artifact;
+- post-ECC SHA-256 verification so higher-weight SECDED miscorrections cannot silently become successful storage recovery;
+- canonical, explicitly synthetic FASTA labels and 80-column wrapping; and
+- immutable recovery receipts recording corrected codewords and overall-parity corrections.
+
+The clean seed-0 cube is regression-bound to:
+
+- payload SHA-256 `2ba2a34b1dde358045011fbe4dc9dce04da9f56ff34f2eec774486218bb7a6eb`;
+- ECC SHA-256 `2be07b5508b379c43912d9b853dad558ec2e9c89b0343b388047ab06c2505f3c`; and
+- DNA SHA-256 `3df2e0a473defda6695f2a9f57c98114fe9f2162c9c0c25af326466bda708be4`.
+
+ECC and integrity have distinct roles: SECDED performs correction/detection; SHA-256 authenticates the recovered bytes. Synthetic FASTA is a deterministic storage container only, not a biological sequence claim.
+
 ## Repository map
 
 | Path | Purpose |
@@ -129,8 +153,9 @@ The scalar update is authoritative. The bounded parallel path reads only the imm
 | `cosmo_core/` | Canonical deterministic Python arithmetic, payload, ECC, DNA, integrity, manifest, and exact E8/Weyl primitives |
 | `cosmo_core/e8.py` | Exact doubled-coordinate E8 roots, lattice predicates, canonical identity, and Weyl reflections |
 | `cosmo_core/triadic.py` | Deterministic 8×8×8 ternary lattice, bounded parallel updates, diagnostics, and recovery model |
+| `cosmo_core/storage.py` | B5 cube/bytes/SECDED/ACGT/synthetic-FASTA round-trip and integrity receipts |
 | `cosmovirus.py` | Compatibility-facing Python mirror backed by `cosmo_core` |
-| `tests/` | Python regression tests covering B2 codecs, B3 roots/reflections, and B4 scalar/parallel/recovery invariants |
+| `tests/` | Python regression tests covering B2 codecs, B3 roots/reflections, B4 lattice/recovery, and B5 storage corruption contracts |
 | `scripts/check-lean-trust.sh` | Fast lexical preflight for forbidden Lean source constructs |
 | `scripts/prepare-lean-audit.py` | Frozen manifest, artifact, symlink, path-package, and import-layout validation |
 | `scripts/verify-lean-source-state.py` | Hardened Git dependency-source identity and source-cache receipt verification |
@@ -174,6 +199,7 @@ python -m unittest discover -s tests -v
 (cd tests && python test_phase_b2.py)
 (cd tests && python test_phase_b3.py)
 (cd tests && python test_phase_b4.py)
+(cd tests && python test_phase_b5.py)
 python -m compileall -q cosmo_core cosmovirus.py tests
 ```
 
@@ -183,7 +209,7 @@ For the CI-equivalent static check:
 
 ```bash
 python -m pip install -r requirements-dev.txt
-mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py tests/test_phase_b4.py
+mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py tests/test_phase_b4.py tests/test_phase_b5.py
 ```
 
 ## Current design status
