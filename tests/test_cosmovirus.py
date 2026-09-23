@@ -44,6 +44,12 @@ class CosmovirusCoreTests(unittest.TestCase):
             self.cosmo.byte_sum(),
         )
 
+    def test_cuneiform_table_remains_instance_local_and_mutable(self) -> None:
+        other = CosmoBit101()
+        self.cosmo.cuneiform_table[0x00] = ("TEST", "compatibility")
+        self.assertEqual(self.cosmo.cuneiform_table[0x00][0], "TEST")
+        self.assertNotIn(0x00, other.cuneiform_table)
+
     def test_diag_annihilates_linear_ramp(self) -> None:
         self.assertEqual(
             self.cosmo.diag_operator([1.0, 2.0, 3.0, 4.0, 5.0]),
