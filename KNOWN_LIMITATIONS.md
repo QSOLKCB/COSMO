@@ -17,6 +17,16 @@ This file is part of COSMO's trust boundary. A green build means the checked cod
 - Weyl reflections operate only on vectors satisfying the exact E8-lattice predicate used by the B3 model. The module does not claim that arbitrary COSMO symbolic state is an E8 lattice vector.
 - The existence of an exact E8 mathematical core does not establish any physical, biological, archaeological, or cosmological correspondence for other COSMO labels.
 
+## Triadic lattice experimental boundary
+
+- Phase B4 is a deterministic finite-state computation over an 8×8×8 ternary lattice. It is not a model or demonstration of physical quantum hardware, qutrit devices, or error correction on quantum systems.
+- Seeded initialization uses a stateless deterministic integer mixer for replay, not a physical or cryptographic randomness claim.
+- The optional ternary-digit mask is a discrete base-3 residue texture. No fractal dimension, 3-adic physical mechanism, or empirical scaling law is claimed.
+- The parallel path uses bounded CPython worker threads and records observed thread use separately from requested/effective configuration. No speedup or true multicore-execution claim is made without separate benchmark evidence.
+- Normalized entropy is a state-population diagnostic only. Phase B4 introduces no spectral/physical interpretation because no justified spectral observable has been selected.
+- The repetition-code recovery model corrects one altered trit per three-symbol codeword. More severe corruption is outside its documented correction capability.
+- Loop closure and cycle/convergence metrics describe the chosen deterministic transition rule only; they are not evidence of physical stability or recurrence.
+
 ## Data and symbolic mappings
 
 - The represented Dragon Seed payload contains 8 bytes, hence 64 bits. `101` is currently a project mnemonic, not represented payload length.
