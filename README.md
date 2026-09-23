@@ -14,7 +14,7 @@ The repository deliberately separates what is **proved or computed** from what i
 | **HYPOTHESIS** | Testable cross-domain proposal not yet validated | “COSMO hypothesizes …” |
 | **SYMBOLIC** | Artistic, mythological, or interpretive mapping | “COSMO symbolically associates …” |
 
-The current Lean/Python core is intentionally narrow. The six COSMO layer names remain project vocabulary, while the code proves only the finite-state and arithmetic facts explicitly stated in the source. Phase D makes this separation machine-auditable through [CLAIM-LEDGER.md](CLAIM-LEDGER.md) and `claims/claim-ledger.json`; CI rejects class/provenance drift.
+The current Lean/Python core is intentionally narrow. The six COSMO layer names remain project vocabulary, while the code proves only the finite-state and arithmetic facts explicitly stated in the source. Phase D makes this separation machine-auditable through [CLAIM-LEDGER.md](CLAIM-LEDGER.md) and `claims/claim-ledger.json`; CI rejects class/provenance drift and requires the Markdown index to match the JSON rendering byte-for-byte.
 
 ## Verified baseline
 
@@ -177,7 +177,7 @@ The canonical machine-readable ledger is `claims/claim-ledger.json` with schema 
 - an explicit evidence boundary; and
 - mandatory falsification criteria for hypotheses.
 
-`scripts/validate-claim-ledger.py` fails closed if IDs are duplicated/out of order, evidence classes change, provenance anchors disappear, scientific claims lack external sources, hypotheses lose falsification criteria, symbolic claims lose non-empirical boundaries, or the Markdown/JSON ledgers diverge.
+`scripts/validate-claim-ledger.py` fails closed if IDs are duplicated/out of order, evidence classes change, provenance anchors disappear, scientific claims lack external sources, hypotheses leave the `PROPOSED` state or lose falsification criteria, symbolic claims lose `empirical_status = NON_EMPIRICAL`, provenance paths escape the repository, or the Markdown rendering diverges from JSON.
 
 The initial ledger records, among other things:
 
