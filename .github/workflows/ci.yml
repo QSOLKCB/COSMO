@@ -456,9 +456,10 @@ jobs:
           (cd tests && python test_phase_b3.py)
           (cd tests && python test_phase_b4.py)
           (cd tests && python test_phase_b5.py)
+          (cd tests && python test_phase_c.py)
 
       - name: Static type check
-        run: mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py tests/test_phase_b4.py tests/test_phase_b5.py
+        run: mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py tests/test_phase_b4.py tests/test_phase_b5.py tests/test_phase_c.py
 
       - name: Bytecode compile check
         run: python -m compileall -q cosmo_core cosmovirus.py tests
