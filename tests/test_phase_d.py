@@ -105,6 +105,64 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             render_index(self.load_ledger()),
         )
 
+
+    def test_identifier_syntax_rejects_malformed_values(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_identifiers = cast(
+            Callable[[str, object], dict[str, str]],
+            namespace["validate_identifiers"],
+        )
+
+        bad_sets = (
+            {"PMID": "not-a-pmid"},
+            {"PMCID": "   "},
+            {"DOI": "10.bad/doi"},
+            {"RefSeq": "NC_001526"},
+            {"year": "20X1"},
+        )
+        for identifiers in bad_sets:
+            with self.subTest(identifiers=identifiers):
+                with self.assertRaises(SystemExit):
+                    validate_identifiers("SRC-TEST", identifiers)
+
+    def test_duplicate_json_keys_are_rejected(self) -> None:
+        namespace = self.load_validator_namespace()
+        parse_json_text = cast(
+            Callable[[str], dict[str, Any]],
+            namespace["parse_json_text"],
+        )
+        ambiguous = (
+            '{"id":"COSMO-D-012","status":"SUPPORTED",'
+            '"status":"PROPOSED"}'
+        )
+        with self.assertRaises(SystemExit):
+            parse_json_text(ambiguous)
+
+    def test_markdown_rendered_fields_must_be_single_line(self) -> None:
+        namespace = self.load_validator_namespace()
+        require_inline_string = cast(
+            Callable[[object, str], str],
+            namespace["require_inline_string"],
+        )
+        injected = (
+            "Legitimate claim text\n\n"
+            "### COSMO-D-999 — SCIENTIFIC\n"
+            "- **Status:** `SUPPORTED`"
+        )
+        with self.assertRaises(SystemExit):
+            require_inline_string(injected, "claim statement")
+
+    def test_p16_provenance_anchor_is_claim_specific(self) -> None:
+        ledger = self.load_ledger()
+        claim = next(
+            claim for claim in ledger["claims"]
+            if claim["id"] == "COSMO-D-008"
+        )
+        self.assertEqual(
+            claim["provenance"][0]["anchor"],
+            "COSMO-D-008",
+        )
+
     def test_hpv16_reference_accession_is_versioned(self) -> None:
         ledger = self.load_ledger()
         source = next(
