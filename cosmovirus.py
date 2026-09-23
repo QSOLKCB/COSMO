@@ -54,7 +54,9 @@ class CosmoBit101:
 
     strand: bytes = DRAGON_SEED
     byte_labels: tuple[str, ...] = BYTE_LABELS
-    cuneiform_table: dict[int, tuple[str, str]] = field(\n        default_factory=lambda: dict(CUNEIFORM_TABLE)\n    )
+    cuneiform_table: dict[int, tuple[str, str]] = field(
+        default_factory=lambda: dict(CUNEIFORM_TABLE)
+    )
 
     def phi_power(self, n: int) -> float:
         """Return the floating-point approximation ``PHI ** n``."""
