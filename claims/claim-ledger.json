@@ -260,7 +260,7 @@
       ],
       "sources": [],
       "falsification": null,
-      "boundary": "No established biological mechanism connecting Spin(8) triality to HPV capsid assembly is claimed."
+      "boundary": "The repository does not claim an established biological mechanism connecting Spin(8) triality to HPV capsid assembly."
     },
     {
       "id": "COSMO-D-012",
@@ -294,7 +294,7 @@
         "SRC-SIS2-PMID-25590815"
       ],
       "falsification": null,
-      "boundary": "The scientific source supports SiS2 crystal-structure facts only."
+      "boundary": "The scientific source does not establish a biological substrate role; it supports SiS2 crystal-structure facts only."
     },
     {
       "id": "COSMO-D-014",
