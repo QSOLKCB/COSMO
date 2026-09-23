@@ -64,6 +64,18 @@ class ExperimentManifest:
         ):
             raise ValueError("seed must be a non-negative integer")
 
+        if not isinstance(self.parameters, tuple):
+            raise ValueError("parameters must be an immutable tuple")
+        if any(
+            not isinstance(item, tuple) or len(item) != 2
+            for item in self.parameters
+        ):
+            raise ValueError("each manifest parameter must be a tuple pair")
+        if not isinstance(self.inputs, tuple):
+            raise ValueError("inputs must be an immutable tuple")
+        if not isinstance(self.outputs, tuple):
+            raise ValueError("outputs must be an immutable tuple")
+
         parameter_names = [name for name, _value in self.parameters]
         if any(not isinstance(name, str) or not name for name in parameter_names):
             raise ValueError("parameter names must be non-empty strings")
@@ -80,14 +92,16 @@ class ExperimentManifest:
             if isinstance(value, float) and not math.isfinite(value):
                 raise ValueError("manifest float parameters must be finite")
 
-        self._validate_artifact_names(self.inputs, "input")
-        self._validate_artifact_names(self.outputs, "output")
+        self._validate_artifacts(self.inputs, "input")
+        self._validate_artifacts(self.outputs, "output")
 
     @staticmethod
-    def _validate_artifact_names(
+    def _validate_artifacts(
         artifacts: tuple[ArtifactDigest, ...],
         role: str,
     ) -> None:
+        if any(not isinstance(artifact, ArtifactDigest) for artifact in artifacts):
+            raise ValueError(f"{role} artifacts must be ArtifactDigest values")
         names = [artifact.name for artifact in artifacts]
         if len(set(names)) != len(names):
             raise ValueError(f"{role} artifact names must be unique")
