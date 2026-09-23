@@ -71,6 +71,13 @@ on its own. A companion Lean~4 file (\texttt{cosmovirus.lean}) machine-checks
 the discrete fragment of this specification.
 \end{abstract}
 
+\noindent\textbf{Phase D evidence notice.}
+This document is a historical formal/symbolic source, not a single evidence
+class. Authoritative claim classification and provenance live in
+\texttt{CLAIM-LEDGER.md} / \texttt{claims/claim-ledger.json}. Scientific
+context, hypotheses, and symbolic readings below must not be promoted beyond
+their ledger class.
+
 \tableofcontents
 
 % =====================================================================
@@ -86,14 +93,18 @@ meaning.
 \textbf{Symbol} & \textbf{Type / signature} & \textbf{Meaning} \\
 \midrule
 \endhead
-\EEs & \text{Lie group, } \dim = 248 & Dual / complexified exceptional Lie
-   group $\EE$; the ``pure symmetry'' source object. \\
+\EEs & \text{project state label} & E8-labelled source state. Phase B3
+   separately implements the standard 240-root $E_8$ system computationally;
+   the ``pure symmetry'' reading is symbolic. \\
 \phigr & \mathbb{R},\ \phigr = \tfrac{1+\sqrt5}{2} & Golden ratio
    $\approx 1.618$; base of the scaling operator (the ``irrational spine''). \\
-\phigr\text{-}\mathrm{SCL} & \EEs \to V_4 & Golden Scaling / Curvature Limit:
-   projection of $\EE$ toward the 4D quasicrystal. \\
-\SiS & \text{material object} & Silicon disulfide; linear
-   $\mathrm{S{=}Si{=}S}$ tetrahedral-chain substrate. \\
+\phigr\text{-}\mathrm{SCL} & \text{project symbolic operator} &
+   Golden-scaling vocabulary retained from the historical framework; no
+   physical projection into a quasicrystal is established. \\
+\SiS & \text{material context / project state label} & Silicon disulfide.
+   The ambient-pressure phase is orthorhombic and contains chains of distorted
+   edge-sharing $\mathrm{SiS_4}$ tetrahedra (COSMO-D-005); ``substrate'' and
+   ``life-code'' language is symbolic (COSMO-D-013). \\
 \DIAG & \mathbb{R}^{n}\!\to\mathbb{R}^{n-2} & Discrete second-derivative
    stencil $(1,-2,1)$; edge / contrast detector. \\
 \HPV & \text{operator} & Human papillomavirus type 16 infection
