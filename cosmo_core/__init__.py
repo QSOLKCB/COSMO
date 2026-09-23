@@ -17,6 +17,20 @@ from .constants import (
     QUARTER_TURN_RADIANS,
 )
 from .dna import bytes_to_dna, dna_to_bytes
+from .dynamics import (
+    CANONICAL_COSMO_ORBIT,
+    CosmoState,
+    TransitionKind,
+    TransitionWitness,
+    canonical_orbit,
+    cosmo_step,
+    iterate_cosmo_state,
+    reaches_within_cycle,
+    steps_to_reach,
+    transition_kind,
+    transition_path,
+    transition_witness,
+)
 from .ecc import (
     CodewordDecodeResult,
     SecdedDecodeResult,
@@ -236,4 +250,16 @@ __all__ = [
     "recover_payload_from_fasta",
     "recover_payload_storage",
     "render_synthetic_fasta",
+    "CANONICAL_COSMO_ORBIT",
+    "CosmoState",
+    "TransitionKind",
+    "TransitionWitness",
+    "canonical_orbit",
+    "cosmo_step",
+    "iterate_cosmo_state",
+    "reaches_within_cycle",
+    "steps_to_reach",
+    "transition_kind",
+    "transition_path",
+    "transition_witness",
 ]
