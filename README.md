@@ -14,7 +14,7 @@ The repository deliberately separates what is **proved or computed** from what i
 | **HYPOTHESIS** | Testable cross-domain proposal not yet validated | “COSMO hypothesizes …” |
 | **SYMBOLIC** | Artistic, mythological, or interpretive mapping | “COSMO symbolically associates …” |
 
-The current Lean/Python core is intentionally narrow. The six COSMO layer names remain project vocabulary, while the code proves only the finite-state and arithmetic facts explicitly stated in the source.
+The current Lean/Python core is intentionally narrow. The six COSMO layer names remain project vocabulary, while the code proves only the finite-state and arithmetic facts explicitly stated in the source. Phase D makes this separation machine-auditable through [CLAIM-LEDGER.md](CLAIM-LEDGER.md) and `claims/claim-ledger.json`; CI rejects class/provenance drift.
 
 ## Verified baseline
 
@@ -164,6 +164,31 @@ The Lean core now provides:
 
 These are formal/computational properties of the discrete state machine only. The labels do not make the corresponding scientific or symbolic interpretations true. Category-theory construction remains Phase E work and must derive from this state machine rather than define a second transition semantics.
 
+## Phase D claim ledger and scientific provenance
+
+Phase D turns the evidence classes above into a validated repository contract.
+
+The canonical machine-readable ledger is `claims/claim-ledger.json` with schema `COSMO-CLAIMS-D-1`; [CLAIM-LEDGER.md](CLAIM-LEDGER.md) is the reviewed human index. Stable `COSMO-D-###` identifiers bind claims to:
+
+- one of **FORMAL / COMPUTATIONAL / SCIENTIFIC / HYPOTHESIS / SYMBOLIC**;
+- exact repository provenance anchors;
+- external scholarly/database sources where required;
+- accession/version identifiers where available;
+- an explicit evidence boundary; and
+- mandatory falsification criteria for hypotheses.
+
+`scripts/validate-claim-ledger.py` fails closed if IDs are duplicated/out of order, evidence classes change, provenance anchors disappear, scientific claims lack external sources, hypotheses lose falsification criteria, symbolic claims lose non-empirical boundaries, or the Markdown/JSON ledgers diverge.
+
+The initial ledger records, among other things:
+
+- Phase C six-step closure and reachability as **FORMAL**;
+- the Phase B3 E8 root construction and B5 storage round trip as **COMPUTATIONAL**;
+- Spin(8) triality, SiS2 crystal structure, HPV16 RefSeq **NC_001526.4**, E6/E7 biology, and scoped p16 usage as externally sourced **SCIENTIFIC** context;
+- cuneiform, cosmology/Ouroboros, life-code, and triality↔capsid associations as **SYMBOLIC** unless separately tested; and
+- a triality-to-HPV/capsid predictive bridge only as a **HYPOTHESIS** with a preregistered falsification requirement.
+
+Phase D also rewrites the historical LaTeX so unsupported bridges no longer appear with theorem/scientific force. The creative material is retained, but it is explicitly classified.
+
 ## Repository map
 
 | Path | Purpose |
@@ -176,8 +201,11 @@ These are formal/computational properties of the discrete state machine only. Th
 | `cosmo_core/triadic.py` | Deterministic 8×8×8 ternary lattice, bounded parallel updates, diagnostics, and recovery model |
 | `cosmo_core/storage.py` | B5 cube/bytes/SECDED/ACGT/synthetic-FASTA round-trip and integrity receipts |
 | `cosmo_core/dynamics.py` | Phase C authoritative six-state transition, typed witnesses, paths, and reachability |
+| `claims/claim-ledger.json` | Canonical Phase D machine-readable claim classes, provenance, sources, and falsification boundaries |
+| `CLAIM-LEDGER.md` | Human-readable Phase D claim/source index |
+| `scripts/validate-claim-ledger.py` | CI validator for claim IDs, evidence classes, provenance anchors, sources, and hypothesis boundaries |
 | `cosmovirus.py` | Compatibility-facing Python mirror backed by `cosmo_core` |
-| `tests/` | Python regression tests covering B2-B5 deterministic cores plus Phase C six-state dynamics |
+| `tests/` | Python regression tests covering B2-B5 deterministic cores, Phase C dynamics, and Phase D provenance governance |
 | `scripts/check-lean-trust.sh` | Fast lexical preflight for forbidden Lean source constructs |
 | `scripts/prepare-lean-audit.py` | Frozen manifest, artifact, symlink, path-package, and import-layout validation |
 | `scripts/verify-lean-source-state.py` | Hardened Git dependency-source identity and source-cache receipt verification |
@@ -223,6 +251,8 @@ python -m unittest discover -s tests -v
 (cd tests && python test_phase_b4.py)
 (cd tests && python test_phase_b5.py)
 (cd tests && python test_phase_c.py)
+(cd tests && python test_phase_d.py)
+python scripts/validate-claim-ledger.py
 python -m compileall -q cosmo_core cosmovirus.py tests
 ```
 
@@ -232,7 +262,7 @@ For the CI-equivalent static check:
 
 ```bash
 python -m pip install -r requirements-dev.txt
-mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py tests/test_phase_b4.py tests/test_phase_b5.py tests/test_phase_c.py
+mypy --strict cosmo_core cosmovirus.py scripts/validate-claim-ledger.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py tests/test_phase_b4.py tests/test_phase_b5.py tests/test_phase_c.py tests/test_phase_d.py
 ```
 
 ## Current design status
