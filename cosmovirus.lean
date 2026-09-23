@@ -259,9 +259,14 @@ theorem first_five_not_periodic (layer : CosmoLayer) :
 
 /-- Reachability inside one complete six-state orbit. -/
 def ReachesWithinCycle (source target : CosmoLayer) : Prop :=
-  ∃ n : Fin 6, psiIterate n.val source = target
+  psiIterate 0 source = target ∨
+  psiIterate 1 source = target ∨
+  psiIterate 2 source = target ∨
+  psiIterate 3 source = target ∨
+  psiIterate 4 source = target ∨
+  psiIterate 5 source = target
 
-/-- Every state reaches every other state in a unique six-state cycle. -/
+/-- Every state reaches every other state within one complete six-state orbit. -/
 theorem every_layer_reachable (source target : CosmoLayer) :
     ReachesWithinCycle source target := by
   cases source <;> cases target <;> decide
