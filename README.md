@@ -143,6 +143,27 @@ The clean seed-0 cube is regression-bound to:
 
 ECC and integrity have distinct roles: SECDED performs correction/detection; SHA-256 authenticates the recovered bytes. Synthetic FASTA is a deterministic storage container only, not a biological sequence claim.
 
+## Phase C authoritative six-state dynamics
+
+Phase C replaces the legacy four-function Psi composition with one explicit six-state transition system shared by Lean and Python:
+
+`E8Symmetry -> PhiScaled -> SiS2Substrate -> TrialityBranch -> HPV16Layer -> OuroborosLoop -> E8Symmetry`
+
+In Lean, `cosmoStep` is the sole authoritative one-step function and `psiEquation` is retained as a compatibility-facing alias for exactly one `cosmoStep`. The old helper functions remain available only as legacy utilities and no longer define Psi semantics.
+
+The Lean core now provides:
+
+- the exact six-state `CosmoLayer` vocabulary;
+- typed indexed `Transition source target` witnesses for the six permitted edges;
+- proof that six steps return every state to itself;
+- proof that no state closes after one through five positive steps;
+- proof that every source reaches every target within one six-state orbit;
+- a canonical, duplicate-free orbit in roadmap order.
+
+`cosmo_core/dynamics.py` mirrors the same authoritative state order and one-step semantics in Python, with frozen transition witnesses, unique reachability distances in `0..5`, canonical transition paths, and exhaustive all-to-all regression coverage.
+
+These are formal/computational properties of the discrete state machine only. The labels do not make the corresponding scientific or symbolic interpretations true. Category-theory construction remains Phase E work and must derive from this state machine rather than define a second transition semantics.
+
 ## Repository map
 
 | Path | Purpose |
@@ -154,8 +175,9 @@ ECC and integrity have distinct roles: SECDED performs correction/detection; SHA
 | `cosmo_core/e8.py` | Exact doubled-coordinate E8 roots, lattice predicates, canonical identity, and Weyl reflections |
 | `cosmo_core/triadic.py` | Deterministic 8×8×8 ternary lattice, bounded parallel updates, diagnostics, and recovery model |
 | `cosmo_core/storage.py` | B5 cube/bytes/SECDED/ACGT/synthetic-FASTA round-trip and integrity receipts |
+| `cosmo_core/dynamics.py` | Phase C authoritative six-state transition, typed witnesses, paths, and reachability |
 | `cosmovirus.py` | Compatibility-facing Python mirror backed by `cosmo_core` |
-| `tests/` | Python regression tests covering B2 codecs, B3 roots/reflections, B4 lattice/recovery, and B5 storage corruption contracts |
+| `tests/` | Python regression tests covering B2-B5 deterministic cores plus Phase C six-state dynamics |
 | `scripts/check-lean-trust.sh` | Fast lexical preflight for forbidden Lean source constructs |
 | `scripts/prepare-lean-audit.py` | Frozen manifest, artifact, symlink, path-package, and import-layout validation |
 | `scripts/verify-lean-source-state.py` | Hardened Git dependency-source identity and source-cache receipt verification |
@@ -200,6 +222,7 @@ python -m unittest discover -s tests -v
 (cd tests && python test_phase_b3.py)
 (cd tests && python test_phase_b4.py)
 (cd tests && python test_phase_b5.py)
+(cd tests && python test_phase_c.py)
 python -m compileall -q cosmo_core cosmovirus.py tests
 ```
 
@@ -209,12 +232,12 @@ For the CI-equivalent static check:
 
 ```bash
 python -m pip install -r requirements-dev.txt
-mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py tests/test_phase_b4.py tests/test_phase_b5.py
+mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py tests/test_phase_b3.py tests/test_phase_b4.py tests/test_phase_b5.py tests/test_phase_c.py
 ```
 
 ## Current design status
 
-The present `psiEquation` is explicitly marked **legacy**. It is a four-function finite-state composition and is not yet identical to the six-generator cycle described by the category-theory document. Phase C will replace it with the authoritative six-state transition system after the intervening deterministic E8, lattice, and storage phases.
+The discrete COSMO state semantics are now authoritative: Lean `cosmoStep` and Python `cosmo_step` implement the same six-state cycle, and Lean `psiEquation` is a compatibility alias for one authoritative step. The companion category-theory document remains a design sketch; Phase E must construct its categorical presentation from this stabilized transition system rather than maintaining independent state semantics.
 
 See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) before interpreting any cross-domain COSMO mapping as an empirical claim.
 
