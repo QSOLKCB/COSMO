@@ -64,6 +64,24 @@ A cache key is never proof authority. The complete current COSMO module set is r
 
 `.github/workflows/lean-cold-trust.yml` is the separate no-cache reconstruction lane. Pull-request executions validate the cold path; only a successful manual dispatch is intended to support a release-grade statement that the dependency graph was reconstructed from pinned source on that exact run. See [`LEAN-CACHE-POLICY.md`](LEAN-CACHE-POLICY.md) for the normative evidence boundary.
 
+## Phase B2 canonical deterministic core
+
+Phase B2 applies immutable QSOL OPT v1.0.0 records `OPT-PY-001` and `OPT-INV-001` to the reusable Python computation layer.
+
+The `cosmo_core/` package is now the canonical runtime source for:
+
+- immutable constants, including distinct `GOLDEN_RATIO` and `QUARTER_TURN_RADIANS` names;
+- exact Lucas / phi-floor integer arithmetic;
+- Dragon Seed payload measurements and SHA-256 identity;
+- extended Hamming SECDED `(8, 4, 4)` nibble codewords with single-bit correction and double-bit detection;
+- strict uppercase `A/C/G/T` byte encoding with invalid-symbol rejection;
+- canonical JSON bytes and SHA-256 integrity helpers; and
+- experiment manifests that bind a non-negative seed, scalar parameters, input byte identities, and output byte identities.
+
+`cosmovirus.py` remains the compatibility-facing executable wrapper and delegates its deterministic arithmetic and payload operations to `cosmo_core` rather than maintaining a second implementation.
+
+The SECDED layer claims only its documented codeword capability. The full storage experiment and corruption/recovery round-trip remain Phase B5 work.
+
 ## Repository map
 
 | Path | Purpose |
@@ -71,8 +89,9 @@ A cache key is never proof authority. The complete current COSMO module set is r
 | `COSMO.lean` | Aggregate root for the current COSMO library |
 | `cosmovirus.lean` | Machine-checked discrete core |
 | `CosmoTrust.lean` | Semantic environment audit, dependency-closure replay, and non-initializing protected runner |
-| `cosmovirus.py` | Deterministic Python mirror |
-| `tests/` | Python regression tests |
+| `cosmo_core/` | Canonical deterministic Python arithmetic, payload, ECC, DNA, integrity, and manifest primitives |
+| `cosmovirus.py` | Compatibility-facing Python mirror backed by `cosmo_core` |
+| `tests/` | Python regression tests, including exhaustive small-domain B2 codec checks |
 | `scripts/check-lean-trust.sh` | Fast lexical preflight for forbidden Lean source constructs |
 | `scripts/prepare-lean-audit.py` | Frozen manifest, artifact, symlink, path-package, and import-layout validation |
 | `scripts/verify-lean-source-state.py` | Hardened Git dependency-source identity and source-cache receipt verification |
@@ -113,7 +132,8 @@ The runtime module has no third-party dependency.
 ```bash
 python -m unittest discover -s tests -v
 (cd tests && python test_cosmovirus.py)
-python -m compileall -q cosmovirus.py tests
+(cd tests && python test_phase_b2.py)
+python -m compileall -q cosmo_core cosmovirus.py tests
 ```
 
 The direct test invocation is supported as well as discovery, so the regression suite can be run from inside the `tests/` directory without installing COSMO as a package.
@@ -122,12 +142,12 @@ For the CI-equivalent static check:
 
 ```bash
 python -m pip install -r requirements-dev.txt
-mypy --strict cosmovirus.py tests/test_cosmovirus.py
+mypy --strict cosmo_core cosmovirus.py tests/test_cosmovirus.py tests/test_phase_b2.py
 ```
 
 ## Current design status
 
-The present `psiEquation` is explicitly marked **legacy**. It is a four-function finite-state composition and is not yet identical to the six-generator cycle described by the category-theory document. The planned next architecture pass will define a single authoritative six-state transition system and derive the categorical view from it.
+The present `psiEquation` is explicitly marked **legacy**. It is a four-function finite-state composition and is not yet identical to the six-generator cycle described by the category-theory document. Phase C will replace it with the authoritative six-state transition system after the intervening deterministic E8, lattice, and storage phases.
 
 See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) before interpreting any cross-domain COSMO mapping as an empirical claim.
 
