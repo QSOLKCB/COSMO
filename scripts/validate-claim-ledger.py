@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Never, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER_PATH = ROOT / "claims" / "claim-ledger.json"
@@ -17,7 +17,7 @@ CLAIM_ID = re.compile(r"COSMO-D-[0-9]{3}$")
 SOURCE_ID = re.compile(r"SRC-[A-Z0-9][A-Z0-9._-]*$")
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> Never:
     raise SystemExit(f"claim-ledger validation failed: {message}")
 
 
@@ -28,7 +28,7 @@ def load_json() -> dict[str, Any]:
         fail(f"cannot read canonical JSON: {exc}")
     if not isinstance(raw, dict):
         fail("ledger root must be an object")
-    return raw
+    return cast(dict[str, Any], raw)
 
 
 def require_string(value: object, label: str) -> str:
