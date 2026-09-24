@@ -23,10 +23,10 @@ CLAIM_ID = re.compile(r"COSMO-D-[0-9]{3}$")
 CLAIM_ID_SEARCH = re.compile(r"\bCOSMO-D-[0-9]{3}\b")
 SOURCE_ID = re.compile(r"SRC-[A-Z0-9][A-Z0-9._-]*$")
 LEAN_THEOREM_ANCHOR = re.compile(
-    r"theorem ([A-Za-z_][A-Za-z0-9_']*)\\b.+:=\\s*by$"
+    r"theorem ([A-Za-z_][A-Za-z0-9_']*)\b.+:=\s*by$"
 )
 PROTECTED_LEAN_SOURCE_RE = re.compile(
-    r"(?m)^compile_project_module\\s+([A-Za-z0-9_./-]+\\.lean)\\s+"
+    r"(?m)^compile_project_module\s+([A-Za-z0-9_./-]+\.lean)\s+"
 )
 PUBLIC_CROSS_DOMAIN_GOVERNING_CLASSES = frozenset({"HYPOTHESIS", "SYMBOLIC"})
 IDENTIFIER_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -945,14 +945,14 @@ def public_assertion_binding_scope(
     """Return the punctuation-bounded proposition used to bind a claim ID."""
     left_boundary = 0
     for boundary in re.finditer(
-        r"(?:[.!?;,]|\\b(?:but|however|yet|although|though|while|whereas)\\b)",
+        r"(?:[.!?;,]|\b(?:but|however|yet|although|though|while|whereas)\b)",
         text[:assertion.start()],
         re.IGNORECASE,
     ):
         left_boundary = boundary.end()
 
     right_match = re.search(
-        r"(?:[.!?;,]|\\b(?:but|however|yet)\\b)",
+        r"(?:[.!?;,]|\b(?:but|however|yet)\b)",
         text[assertion.end():],
         re.IGNORECASE,
     )
@@ -970,7 +970,7 @@ def public_assertion_is_negated(
     """Return whether negation locally governs the assertion predicate."""
     prefix_start = 0
     for boundary in re.finditer(
-        r"(?:[.!?;,]|\\b(?:and|but|however|yet|although|though|while|whereas)\\b)",
+        r"(?:[.!?;,]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
         text[:assertion.start()],
         re.IGNORECASE,
     ):
@@ -985,7 +985,7 @@ def validate_public_claim_text(
     claim_classes: dict[str, str],
 ) -> None:
     """Require each positive cross-domain assertion to carry its own ledger ID."""
-    paragraphs = re.split(r"\\n\\s*\\n", text)
+    paragraphs = re.split(r"\n\s*\n", text)
     for paragraph_number, paragraph in enumerate(paragraphs, start=1):
         compact = " ".join(paragraph.split())
         if not compact:
