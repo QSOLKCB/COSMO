@@ -1,0 +1,359 @@
+{
+  "schema": "COSMO-CLAIMS-D-1",
+  "evidence_classes": [
+    "FORMAL",
+    "COMPUTATIONAL",
+    "SCIENTIFIC",
+    "HYPOTHESIS",
+    "SYMBOLIC"
+  ],
+  "sources": [
+    {
+      "id": "SRC-E8-MATHWORLD",
+      "kind": "scholarly_reference",
+      "title": "Gosset Polytope — E8 root polytope",
+      "url": "https://mathworld.wolfram.com/GossetPolytope.html",
+      "identifiers": {},
+      "domain": "mathematics",
+      "identifier_urls": {}
+    },
+    {
+      "id": "SRC-SPIN8-PTEP-2021",
+      "kind": "scholarly_article",
+      "title": "Vertex operator superalgebra/sigma model correspondences: The four-torus case",
+      "url": "https://academic.oup.com/ptep/article/2021/8/08B102/6353037",
+      "identifiers": {
+        "year": "2021"
+      },
+      "domain": "mathematics",
+      "identifier_urls": {}
+    },
+    {
+      "id": "SRC-SIS2-PMID-25590815",
+      "kind": "peer_reviewed_article",
+      "title": "Two high-pressure phases of SiS2 as missing links between the extremes of only edge-sharing and only corner-sharing tetrahedra",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/25590815/",
+      "identifiers": {
+        "PMID": "25590815",
+        "DOI": "10.1021/ic501825r"
+      },
+      "domain": "materials_science",
+      "identifier_urls": {
+        "PMID": "https://pubmed.ncbi.nlm.nih.gov/25590815/",
+        "DOI": "https://doi.org/10.1021/ic501825r"
+      }
+    },
+    {
+      "id": "SRC-HPV16-REFSEQ",
+      "kind": "official_database",
+      "title": "Human papillomavirus type 16, complete genome",
+      "url": "https://www.ncbi.nlm.nih.gov/nuccore/NC_001526.4",
+      "identifiers": {
+        "RefSeq": "NC_001526.4"
+      },
+      "domain": "biomedicine",
+      "identifier_urls": {
+        "RefSeq": "https://www.ncbi.nlm.nih.gov/nuccore/NC_001526.4"
+      }
+    },
+    {
+      "id": "SRC-HPV16-E6E7-PMID-17645777",
+      "kind": "peer_reviewed_review",
+      "title": "Basic mechanisms of high-risk human papillomavirus-induced carcinogenesis: Roles of E6 and E7 proteins",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11158331/",
+      "identifiers": {
+        "PMID": "17645777",
+        "PMCID": "PMC11158331"
+      },
+      "domain": "biomedicine",
+      "identifier_urls": {
+        "PMID": "https://pubmed.ncbi.nlm.nih.gov/17645777/",
+        "PMCID": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11158331/"
+      }
+    },
+    {
+      "id": "SRC-HPV-P16-PMC8409095",
+      "kind": "peer_reviewed_review",
+      "title": "Biology of HPV Mediated Carcinogenesis and Tumor Progression",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8409095/",
+      "identifiers": {
+        "PMCID": "PMC8409095"
+      },
+      "domain": "biomedicine",
+      "identifier_urls": {
+        "PMCID": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8409095/"
+      }
+    }
+  ],
+  "claims": [
+    {
+      "id": "COSMO-D-001",
+      "class": "FORMAL",
+      "status": "SUPPORTED",
+      "statement": "For every CosmoLayer, six applications of the authoritative Lean transition return the layer to itself.",
+      "provenance": [
+        {
+          "path": "cosmovirus.lean",
+          "anchor": "theorem six_step_periodic (layer : CosmoLayer) : psiIterate 6 layer = layer := by",
+          "role": "kernel_checked_theorem"
+        }
+      ],
+      "sources": [],
+      "falsification": null,
+      "boundary": "This is a theorem about the finite state machine only; it is not a physical periodicity claim."
+    },
+    {
+      "id": "COSMO-D-002",
+      "class": "FORMAL",
+      "status": "SUPPORTED",
+      "statement": "Every authoritative COSMO layer reaches every other layer within one complete six-state orbit.",
+      "provenance": [
+        {
+          "path": "cosmovirus.lean",
+          "anchor": "theorem every_layer_reachable (source target : CosmoLayer) : ReachesWithinCycle source target := by",
+          "role": "kernel_checked_theorem"
+        }
+      ],
+      "sources": [],
+      "falsification": null,
+      "boundary": "Reachability is defined inside the project state machine."
+    },
+    {
+      "id": "COSMO-D-003",
+      "class": "COMPUTATIONAL",
+      "status": "SUPPORTED",
+      "statement": "The Phase B3 Python reference generator deterministically constructs 240 unique E8 roots with rank 8 and squared norm 2, and the canonical table is bound to a reviewed SHA-256.",
+      "provenance": [
+        {
+          "path": "cosmo_core/e8.py",
+          "anchor": "def validate_e8_root_system",
+          "role": "implementation"
+        },
+        {
+          "path": "tests/test_phase_b3.py",
+          "anchor": "test_root_system_report_has_rank_eight_and_norm_two",
+          "role": "regression"
+        }
+      ],
+      "sources": [
+        "SRC-E8-MATHWORLD"
+      ],
+      "falsification": null,
+      "boundary": "This is deterministic computational evidence; the local Lean core does not yet formalize the E8 root construction."
+    },
+    {
+      "id": "COSMO-D-004",
+      "class": "SCIENTIFIC",
+      "status": "SUPPORTED",
+      "statement": "Spin(8) has triality symmetry with an S3 outer automorphism action that permutes its vector and two spinor eight-dimensional representations.",
+      "provenance": [
+        {
+          "path": "cosmovirus.tex",
+          "anchor": "COSMO-D-004",
+          "role": "documented_context"
+        }
+      ],
+      "sources": [
+        "SRC-SPIN8-PTEP-2021"
+      ],
+      "falsification": null,
+      "boundary": "This mathematical fact does not establish a mechanism connecting Spin(8) triality to HPV, capsids, SiS2, or cosmology.",
+      "domain": "mathematics"
+    },
+    {
+      "id": "COSMO-D-005",
+      "class": "SCIENTIFIC",
+      "status": "SUPPORTED",
+      "statement": "The ambient-pressure phase of SiS2 is orthorhombic and contains chains of distorted edge-sharing SiS4 tetrahedra.",
+      "provenance": [
+        {
+          "path": "cosmovirus.tex",
+          "anchor": "COSMO-D-005",
+          "role": "documented_context"
+        }
+      ],
+      "sources": [
+        "SRC-SIS2-PMID-25590815"
+      ],
+      "falsification": null,
+      "boundary": "This crystallographic fact does not support COSMO's symbolic substrate or life-code interpretation.",
+      "domain": "materials_science"
+    },
+    {
+      "id": "COSMO-D-006",
+      "class": "SCIENTIFIC",
+      "status": "SUPPORTED",
+      "statement": "The NCBI reference sequence used for human papillomavirus type 16 in this ledger is RefSeq NC_001526.4.",
+      "provenance": [
+        {
+          "path": "CLAIM-LEDGER.md",
+          "anchor": "NC_001526.4",
+          "role": "provenance_record"
+        }
+      ],
+      "sources": [
+        "SRC-HPV16-REFSEQ"
+      ],
+      "falsification": null,
+      "boundary": "The accession identifies a reference genome; it does not validate COSMO's state-machine use of the HPV16Layer label.",
+      "domain": "biomedicine"
+    },
+    {
+      "id": "COSMO-D-007",
+      "class": "SCIENTIFIC",
+      "status": "SUPPORTED",
+      "statement": "High-risk HPV E6 and E7 proteins are established carcinogenesis factors; E6 promotes p53 degradation and E7 disrupts pRb/E2F control.",
+      "provenance": [
+        {
+          "path": "cosmovirus.tex",
+          "anchor": "COSMO-D-007",
+          "role": "documented_context"
+        }
+      ],
+      "sources": [
+        "SRC-HPV16-E6E7-PMID-17645777"
+      ],
+      "falsification": null,
+      "boundary": "This biomedical mechanism is external scientific context and is not a mechanism for COSMO transitions.",
+      "domain": "biomedicine"
+    },
+    {
+      "id": "COSMO-D-008",
+      "class": "SCIENTIFIC",
+      "status": "SUPPORTED_WITH_SCOPE",
+      "statement": "p16 immunohistochemistry is used as a surrogate marker for HPV-associated disease in some clinical contexts, but p16 positivity is not identical to direct evidence of active E6/E7 transcription.",
+      "provenance": [
+        {
+          "path": "cosmovirus.tex",
+          "anchor": "COSMO-D-008",
+          "role": "documented_context"
+        }
+      ],
+      "sources": [
+        "SRC-HPV-P16-PMC8409095"
+      ],
+      "falsification": null,
+      "boundary": "COSMO must not equate a generic p16-positive label with HPV16 infection or active viral transcription.",
+      "domain": "biomedicine"
+    },
+    {
+      "id": "COSMO-D-009",
+      "class": "SYMBOLIC",
+      "status": "PROJECT_DEFINED",
+      "statement": "The byte-to-cuneiform labels in COSMO are project-defined symbolic annotations.",
+      "provenance": [
+        {
+          "path": "cosmovirus.lean",
+          "anchor": "def cuneiformAnnotation",
+          "role": "project_definition"
+        },
+        {
+          "path": "KNOWN_LIMITATIONS.md",
+          "anchor": "Cuneiform strings are project-defined symbolic annotations",
+          "role": "scope_boundary"
+        }
+      ],
+      "sources": [],
+      "falsification": null,
+      "boundary": "They are not a decipherment, transliteration, translation, archaeological attribution, or historical sentence.",
+      "empirical_status": "NON_EMPIRICAL"
+    },
+    {
+      "id": "COSMO-D-010",
+      "class": "SYMBOLIC",
+      "status": "PROJECT_DEFINED",
+      "statement": "COSMO's language of undivided cosmic symmetry, life-code substrate, infected reality, and Ouroboros self-causation is symbolic/interpretive vocabulary.",
+      "provenance": [
+        {
+          "path": "cosmovirus.tex",
+          "anchor": "COSMO-D-010",
+          "role": "symbolic_section"
+        }
+      ],
+      "sources": [],
+      "falsification": null,
+      "boundary": "These phrases are not empirical cosmology, materials science, virology, or causal-mechanism claims.",
+      "empirical_status": "NON_EMPIRICAL"
+    },
+    {
+      "id": "COSMO-D-011",
+      "class": "SYMBOLIC",
+      "status": "PROJECT_DEFINED",
+      "statement": "The association of Spin(8) triality with HPV capsid branching or trimerization is a symbolic cross-domain association in the current repository.",
+      "provenance": [
+        {
+          "path": "cosmovirus.tex",
+          "anchor": "capsid",
+          "role": "historical_symbolic_mapping"
+        }
+      ],
+      "sources": [],
+      "falsification": null,
+      "boundary": "The repository does not claim an established biological mechanism connecting Spin(8) triality to HPV capsid assembly.",
+      "empirical_status": "NON_EMPIRICAL"
+    },
+    {
+      "id": "COSMO-D-012",
+      "class": "HYPOTHESIS",
+      "status": "PROPOSED",
+      "statement": "A future quantitatively specified mapping from triality-derived features to an HPV/capsid observable could be tested for predictive value against matched controls.",
+      "provenance": [
+        {
+          "path": "CLAIM-LEDGER.md",
+          "anchor": "COSMO-D-012",
+          "role": "hypothesis_definition"
+        }
+      ],
+      "sources": [],
+      "falsification": {
+        "protocol": "Pre-register the triality-derived mapping, target observable, dataset split, evaluation metric, matched baselines, and decision threshold before evaluating held-out data.",
+        "rejection_condition": "Reject the hypothesis if held-out performance fails the predeclared threshold or is not distinguishable from the matched control baselines.",
+        "controls": [
+          "Matched baseline models fixed before held-out evaluation",
+          "Held-out data excluded from mapping and threshold selection"
+        ]
+      },
+      "boundary": "No such predictive result is currently claimed."
+    },
+    {
+      "id": "COSMO-D-013",
+      "class": "SYMBOLIC",
+      "status": "PROJECT_DEFINED",
+      "statement": "The use of SiS2Substrate as a COSMO state name is symbolic project vocabulary rather than evidence that silicon disulfide is a biological life-code substrate.",
+      "provenance": [
+        {
+          "path": "cosmovirus.lean",
+          "anchor": "SiS2Substrate",
+          "role": "state_label"
+        }
+      ],
+      "sources": [
+        "SRC-SIS2-PMID-25590815"
+      ],
+      "falsification": null,
+      "boundary": "The scientific source does not establish a biological substrate role; it supports SiS2 crystal-structure facts only.",
+      "empirical_status": "NON_EMPIRICAL"
+    },
+    {
+      "id": "COSMO-D-014",
+      "class": "COMPUTATIONAL",
+      "status": "SUPPORTED",
+      "statement": "Within the documented SECDED capability, the Phase B5 software storage pipeline deterministically recovers the original TriadicLattice through bytes, ECC, ACGT, corruption, correction, bytes, and cube reconstruction.",
+      "provenance": [
+        {
+          "path": "cosmo_core/storage.py",
+          "anchor": "def recover_cube_storage",
+          "role": "implementation"
+        },
+        {
+          "path": "tests/test_phase_b5.py",
+          "anchor": "test_full_cube_recovers_one_bit_error_in_every_codeword",
+          "role": "regression"
+        }
+      ],
+      "sources": [],
+      "falsification": null,
+      "boundary": "This is a software codec result, not a laboratory DNA-storage or physical Rubik's Cube claim."
+    }
+  ]
+}

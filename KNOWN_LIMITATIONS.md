@@ -44,11 +44,16 @@ This file is part of COSMO's trust boundary. A green build means the checked cod
 - MIDI/audio visualization remains outside the deterministic storage core.
 - Experiment manifests and storage receipts bind the exact bytes supplied or recovered. They do not independently authenticate external provenance or scientific validity.
 
-## Scientific interpretation
+## Phase D claim/provenance boundary
 
-- Formal verification establishes implications inside the model, not correspondence between model labels and the physical world.
-- Cross-domain E8, quasicrystal, SiS2, HPV16, SEER, and Sumerian relationships require independent domain evidence and, where presented as hypotheses, explicit falsification conditions.
-- The repository's bundled historical source documents include claims and terminology that the September 2026 audits identified as inaccurate or unsupported. They remain archived as project inputs and are not the authority for the corrected computational baseline.
+- `claims/claim-ledger.json` is the Phase D authority for evidence class and provenance; `CLAIM-LEDGER.md` is its reviewed human index. A green ledger validator means the repository satisfies the encoded classification rules, not that every externally sourced claim has been independently replicated by COSMO.
+- **SCIENTIFIC** entries report what cited external sources support. They do not transfer scientific authority to a cross-domain bridge merely because the component domains are individually real.
+- Spin(8) triality is established mathematical context, but the current triality↔HPV capsid mapping is classified **SYMBOLIC**. No biological mechanism is claimed.
+- Ambient-pressure SiS2 structure is externally sourced scientific context; `SiS2Substrate` and “life-code” readings remain **SYMBOLIC** project vocabulary.
+- HPV16 RefSeq `NC_001526.4`, E6/E7 biology, and scoped p16-marker usage are external biomedical context. They do not validate `HPV16Layer` as a biomedical state transition.
+- Cuneiform annotations and cosmological/Ouroboros readings are **SYMBOLIC**, not archaeological decipherment or empirical cosmology.
+- A **HYPOTHESIS** entry must retain explicit falsification criteria. No hypothesis may be promoted to SCIENTIFIC or COMPUTATIONAL merely because a suggestive analogy or numerical match is found.
+- The repository's bundled historical source documents include claims and terminology that the September 2026 audits identified as inaccurate or unsupported. They remain archived as provenance inputs and are not the authority for the corrected ledger.
 
 ## Generated documents
 

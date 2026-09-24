@@ -71,6 +71,13 @@ on its own. A companion Lean~4 file (\texttt{cosmovirus.lean}) machine-checks
 the discrete fragment of this specification.
 \end{abstract}
 
+\noindent\textbf{Phase D evidence notice.}
+This document is a historical formal/symbolic source, not a single evidence
+class. Authoritative claim classification and provenance live in
+\texttt{CLAIM-LEDGER.md} / \texttt{claims/claim-ledger.json}. Scientific
+context, hypotheses, and symbolic readings below must not be promoted beyond
+their ledger class.
+
 \tableofcontents
 
 % =====================================================================
@@ -86,20 +93,30 @@ meaning.
 \textbf{Symbol} & \textbf{Type / signature} & \textbf{Meaning} \\
 \midrule
 \endhead
-\EEs & \text{Lie group, } \dim = 248 & Dual / complexified exceptional Lie
-   group $\EE$; the ``pure symmetry'' source object. \\
+\EEs & \text{project state label} & E8-labelled source state. Phase B3
+   separately implements the standard 240-root $E_8$ system computationally;
+   the ``pure symmetry'' reading is symbolic. \\
 \phigr & \mathbb{R},\ \phigr = \tfrac{1+\sqrt5}{2} & Golden ratio
    $\approx 1.618$; base of the scaling operator (the ``irrational spine''). \\
-\phigr\text{-}\mathrm{SCL} & \EEs \to V_4 & Golden Scaling / Curvature Limit:
-   projection of $\EE$ toward the 4D quasicrystal. \\
-\SiS & \text{material object} & Silicon disulfide; linear
-   $\mathrm{S{=}Si{=}S}$ tetrahedral-chain substrate. \\
+\phigr\text{-}\mathrm{SCL} & \text{project symbolic operator} &
+   Golden-scaling vocabulary retained from the historical framework; no
+   physical projection into a quasicrystal is established. \\
+\SiS & \text{material context / project state label} & Silicon disulfide.
+   The ambient-pressure phase is orthorhombic and contains chains of distorted
+   edge-sharing $\mathrm{SiS_4}$ tetrahedra (COSMO-D-005); ``substrate'' and
+   ``life-code'' language is symbolic (COSMO-D-013). \\
 \DIAG & \mathbb{R}^{n}\!\to\mathbb{R}^{n-2} & Discrete second-derivative
    stencil $(1,-2,1)$; edge / contrast detector. \\
-\HPV & \text{operator} & Human papillomavirus type 16 infection
-   ($E6/E7$ oncoproteins, $p16^{+}$; SEER morphology $8085/3$). \\
-\TRI & \mathrm{SO}(8)\to\mathrm{Spin}(8) & Triality automorphism;
-   $L1$ capsid trimerization / symmetry branching. \\
+\HPV & \text{project state label / biomedical context} & Human
+   papillomavirus type 16 reference genome: RefSeq \texttt{NC\_001526.4}
+   (COSMO-D-006). E6/E7 carcinogenesis mechanisms are external scientific
+   context (COSMO-D-007); p16 is a context-dependent surrogate marker and is
+   not equivalent to active HPV16 transcription (COSMO-D-008). \\
+\TRI & \operatorname{Aut}(\mathrm{Spin}(8))\ \text{(context)} &
+   Triality is the $S_3$ outer-automorphism symmetry permuting the vector and
+   two spinor 8-dimensional representations (COSMO-D-004). Any association
+   with HPV capsid branching is symbolic, not a biological mechanism
+   (COSMO-D-011). \\
 \phigr^{101} & \mathbb{R} & $\approx 1.28\times10^{21}$; the recursion depth
    / loop-entry exponent. \\
 101_2 & \mathbb{N},\ =5 & Binary ``Pentagon Seed''; loop entry code. \\
@@ -148,13 +165,17 @@ $\DIAG$ is the discrete second derivative and an edge/contrast detector.
 
 \begin{operator}[Triality automorphism, $\TRI$]\label{op:tri}
 Let $\mathrm{Out}(\mathrm{Spin}(8))\cong S_3$ act on the three
-$8$-dimensional representations $(\mathbf{8}_v,\mathbf{8}_s,\mathbf{8}_c)$.
+$8$-dimensional representations $(\mathbf{8}_v,\mathbf{8}_s,\mathbf{8}_c)$
+(COSMO-D-004).
 The triality operator $T$ is the order-3 outer automorphism
 \begin{equation}
   T:\ \mathbf{8}_v \mapsto \mathbf{8}_s \mapsto \mathbf{8}_c \mapsto \mathbf{8}_v,
   \qquad T^3 = \mathrm{id}.
 \end{equation}
-Symbolically it drives the $L1$ capsid trimerization ($3\times$ branching).
+COSMO symbolically associates this three-way representation symmetry with
+capsid branching (COSMO-D-011). No established biological mechanism is claimed;
+a future quantitative bridge would require the falsifiable protocol recorded
+as COSMO-D-012.
 \end{operator}
 
 \begin{operator}[Ouroboros recursion, $\Ouro$]\label{op:ouro}
@@ -164,18 +185,19 @@ define the recursion $R:\Zmod{256}\to\Zmod{256}$,
   R(x) = (x+\kappa)\bmod 256,\qquad
   R^{(k+1)} = R\circ R^{(k)} .
 \end{equation}
-The loop is \emph{self-causing}: at the categorical level $\Ouro$ is the
-morphism sending the terminal (infected) object back to the initial object
-$\EEs$ (see \S\ref{sec:diagram}).
+In the symbolic reading the loop is described as ``self-causing''
+(COSMO-D-010). Formally, Phase C establishes only the six-state transition and
+six-step closure; the categorical morphism remains a Phase E target.
 \end{operator}
 
 % =====================================================================
 \section{The Unified $\Psi$-Equation}\label{sec:psi}
 % =====================================================================
-The framework's master statement composes the operators above into a single
-descent map.
+The historical framework's cross-domain $\Psi$ expression is retained below
+as a HYPOTHESIS/SYMBOLIC artifact. It is not the authoritative Phase C state
+transition and is not an established scientific mechanism.
 
-\begin{definition}[Cosmovirus operator]
+\begin{definition}[Historical cross-domain $\Psi$ expression]
 \begin{equation}\label{eq:psi}
   \boxed{\;
   \Psi \;=\; \Ouro \,\circ\, \HPV \,\circ\, \TRI \,\circ\,
@@ -191,9 +213,9 @@ equivalently written as the descent chain
   \xrightarrow{\ \phigr^{101}\ }
   \text{Infected Reality}.
 \end{equation}
-The recursion closes via $\phigr^{101}$: the terminal state is re-injected
-into $\EEs$, so $\Psi$ has the fixed-point structure
-$\Ouro(\Psi(\EEs)) = \EEs$.
+This expression is not used as the Phase C computational transition law.
+Object-level six-step closure is instead established by the Lean theorem
+\texttt{six\_step\_periodic} (COSMO-D-001).
 \end{definition}
 
 \begin{interp}
@@ -222,19 +244,22 @@ The dashed arrow is the $\phigr^{101}$ Ouroboros feedback.
 \end{tikzcd}
 \end{center}
 
-\begin{proposition}[Loop closure]
-The composite around the outer cycle is the identity on the object $\EEs$
-up to the Ouroboros natural transformation; i.e. $\Ouro\circ\Psi \simeq
-\mathrm{id}_{\EEs}$.
+\begin{proposition}[Historical categorical target]
+The statement that the outer composite is an identity up to an Ouroboros
+natural transformation is a Phase E design target, not a theorem established
+by the current Lean core. The current formal result is the finite-state
+six-step closure in COSMO-D-001.
 \end{proposition}
 
 % =====================================================================
-\section{The 101-bit ``Dragon Seed'' Sequence}
+\section{The Dragon Seed 64-bit payload}
 % =====================================================================
-The manifest data is a 64-bit payload framed by the $101$ entry/exit
-trapdoor (hence ``101-bit''). As a formal binary string
-$\bm{b}\in\{0,1\}^{64}$ it splits into eight bytes, each mapped to a Sumerian
-cuneiform sign.
+The represented manifest data is exactly 8 bytes = 64 bits. ``101'' is retained
+as a legacy project mnemonic; it does not add entry/exit framing bits. As a
+binary string $\bm{b}\in\{0,1\}^{64}$ it splits into eight bytes. COSMO maps
+those bytes to project-defined cuneiform annotation labels (COSMO-D-009);
+the mapping is not an archaeological decipherment, transliteration, or
+translation.
 
 \begin{equation*}
 \bm{b} = \underbrace{10110111}_{\texttt{0xB7}}\,
@@ -266,20 +291,21 @@ cuneiform sign.
 \end{center}
 
 \noindent
-\textbf{Invariants.} The declared base-10 checksum (the $EE/E7$
-viral-junction signature) is
+\textbf{Invariants.} The raw byte sum is 1512. The value 1621 is a
+project-declared symbolic invariant and is explicitly \emph{not} a checksum
+derived from the payload:
 \begin{equation}
-  \mathrm{chk}(\bm{b}) = 1621,
+  \mathrm{declaredSymbolicInvariant}=1621,
   \qquad
-  \text{(raw byte sum } \textstyle\sum_i b_i = 1512).
+  \textstyle\sum_i b_i = 1512.
 \end{equation}
-The binary seed $101_2 = 5$ is the Pentagon Seed / Fibonacci growth kernel.
+The binary value $101_2=5$ is retained as the project ``Pentagon Seed''
+mnemonic; no biological or physical growth-kernel mechanism is asserted.
 
 \begin{interp}
-The eight signs read as a Sumerian sentence-glyph: heaven ($AN$) and earth
-($KI$) under the lord $EN.KI$, marked divine (DI\v{G}IR), carrying the
-dragon seed ($SI.SI$) into the temple-house ($E_2$) of knowledge ($ZU$),
-guarded ($UR$).
+COSMO historically reads the eight project-defined signs as a symbolic
+sentence-glyph. Under COSMO-D-009 this remains an artistic interpretation only;
+it is not presented as Sumerian language evidence or an archaeological reading.
 \end{interp}
 
 % =====================================================================

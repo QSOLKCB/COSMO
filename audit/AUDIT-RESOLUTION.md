@@ -53,3 +53,20 @@ Phase C resolves the deferred state-machine finding without rewriting the histor
 - Python mirrors the same transition graph and exhaustively checks all source/target reachability pairs.
 
 The separate category-theory audit finding remains deferred to Phase E.
+
+
+## Phase D provenance resolution
+
+Phase D resolves the audit items for canonical claim/source data, scientific bibliography boundaries, and falsification governance without rewriting the historical PR A table:
+
+- `claims/claim-ledger.json` introduces stable `COSMO-D-###` claim IDs and the exact FORMAL / COMPUTATIONAL / SCIENTIFIC / HYPOTHESIS / SYMBOLIC classes.
+- `CLAIM-LEDGER.md` records the human-readable source registry, including HPV16 RefSeq `NC_001526.4`, PMID/PMCID/DOI identifiers where available, and explicit domain boundaries.
+- CI validates repository provenance anchors and rejects SCIENTIFIC claims without external sources.
+- CI rejects HYPOTHESIS entries without falsification criteria and SYMBOLIC entries without explicit non-empirical boundaries.
+- the historical specification no longer calls 1621 a checksum or the represented Dragon Seed a 101-bit payload;
+- Spin(8) triality is no longer described as an `SO(8) -> Spin(8)` map, and the HPV capsid association is classified as symbolic rather than mechanistic;
+- SiS2 and HPV/p16 text is rewritten to separate sourced domain facts from COSMO state labels;
+- cuneiform and cosmological readings are retained as explicitly symbolic material;
+- the category-theory document is explicitly a Phase E design target rather than a source of already-proved categorical claims.
+
+PDF regeneration remains Phase F work. The corrected source/ledger boundary is authoritative until those artifacts are rebuilt.
