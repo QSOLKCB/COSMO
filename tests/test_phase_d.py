@@ -361,7 +361,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     validate_formal_target(
                         "COSMO-D-999",
-                        "CosmoFormal.lean",
+                        "cosmovirus.lean",
                         (
                             "theorem six_step_periodic (layer : CosmoLayer) : "
                             "psiIterate 6 layer = layer := by"
@@ -433,7 +433,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
     def test_public_cross_domain_assertion_requires_claim_id(self) -> None:
         namespace = self.load_validator_namespace()
         validate_public_claim_text = cast(
-            Callable[[str, str, set[str]], None],
+            Callable[[str, str, dict[str, str]], None],
             namespace["validate_public_claim_text"],
         )
         claim_classes = {
@@ -481,7 +481,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
     def test_public_negation_only_suppresses_its_own_assertion(self) -> None:
         namespace = self.load_validator_namespace()
         validate_public_claim_text = cast(
-            Callable[[str, str, set[str]], None],
+            Callable[[str, str, dict[str, str]], None],
             namespace["validate_public_claim_text"],
         )
         claim_classes = {
