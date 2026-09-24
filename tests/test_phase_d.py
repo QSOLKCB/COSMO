@@ -357,6 +357,22 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             "mathematics",
         )
 
+    def test_reviewed_source_identity_pins_non_url_metadata(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_identity = cast(
+            Callable[[str, dict[str, str]], None],
+            namespace["validate_reviewed_source_identity"],
+        )
+        validate_identity(
+            "SRC-SPIN8-PTEP-2021",
+            {"year": "2021"},
+        )
+        with self.assertRaises(SystemExit):
+            validate_identity(
+                "SRC-SPIN8-PTEP-2021",
+                {"year": "1900"},
+            )
+
     def test_multi_accession_crosswalk_rejects_unrelated_article_ids(self) -> None:
         namespace = self.load_validator_namespace()
         validate_crosswalk = cast(
@@ -631,6 +647,44 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 disabled_by_module_constant,
             )
 
+        disabled_by_constant_comparison = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "RUN_CLAIMED_EVIDENCE = False\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        if RUN_CLAIMED_EVIDENCE is True:\n"
+            "            validate_e8_root_system()\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                disabled_by_constant_comparison,
+            )
+
+        aliased_import_with_shadow = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system as imported_validate\n"
+            "def validate_e8_root_system() -> None:\n"
+            "    return None\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        validate_e8_root_system()\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                aliased_import_with_shadow,
+            )
+
     def test_implementation_provenance_requires_executable_project_source(self) -> None:
         namespace = self.load_validator_namespace()
         validate_implementation = cast(
@@ -661,6 +715,29 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             validate_statement(
                 "COSMO-D-006",
                 "HPV16 RefSeq NC_001526.4 is a vaccine that cures every cancer.",
+            )
+
+    def test_reviewed_claim_definition_rejects_id_repurposing(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_definition = cast(
+            Callable[[str, str, str], None],
+            namespace["validate_reviewed_claim_definition"],
+        )
+        ledger = self.load_ledger()
+        claim = next(
+            claim for claim in ledger["claims"]
+            if claim["id"] == "COSMO-D-003"
+        )
+        validate_definition(
+            claim["id"],
+            claim["class"],
+            claim["statement"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_definition(
+                "COSMO-D-003",
+                "SYMBOLIC",
+                "Unrelated symbolic replacement.",
             )
 
     def test_reviewed_claim_inventory_rejects_deleted_claim(self) -> None:
@@ -831,6 +908,39 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             validate_public_claim_text("sample.md", encoded, {})
 
+    def test_public_claim_guard_normalizes_markdown_rendering(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                r"Spin\(8\) causes H**PV16** cap**sid** assembly.",
+                {},
+            )
+
+    def test_public_list_items_do_not_share_claim_binding_scope(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    "- COSMO-D-012\n"
+                    "- Spin(8) triality causes HPV16 capsid assembly.\n"
+                ),
+                claim_classes,
+            )
+
     def test_public_claim_guard_scans_markdown_table_cells(self) -> None:
         namespace = self.load_validator_namespace()
         validate_public_claim_text = cast(
@@ -935,6 +1045,16 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             claim_classes,
         )
 
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                (
+                    "Spin(8) triality not only causes HPV16 capsid assembly, "
+                    "but also promotes p16 expression."
+                ),
+                claim_classes,
+            )
+
         validate_public_claim_text(
             "README.md",
             (
@@ -944,6 +1064,27 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             ),
             claim_classes,
         )
+
+    def test_public_mechanism_nouns_are_not_causal_by_themselves(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        validate_public_claim_text(
+            "sample.md",
+            (
+                "The Spin(8) triality mechanism differs from the "
+                "HPV16 mechanism."
+            ),
+            {},
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                "Spin(8) triality is the mechanism for HPV16 capsid assembly.",
+                {},
+            )
 
     def test_public_claim_scan_ignores_nonrendered_comments(self) -> None:
         namespace = self.load_validator_namespace()
