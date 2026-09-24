@@ -723,6 +723,63 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 disabled_by_empty_for,
             )
 
+        disabled_by_numeric_false_loop = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        while 0:\n"
+            "            validate_e8_root_system()\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                disabled_by_numeric_false_loop,
+            )
+
+        disabled_after_break = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        while True:\n"
+            "            break\n"
+            "            validate_e8_root_system()\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                disabled_after_break,
+            )
+
+        patched_binding = (
+            "import unittest\n"
+            "from unittest.mock import Mock, patch\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        with patch.dict(globals(), "
+            "{'validate_e8_root_system': Mock()}):\n"
+            "            validate_e8_root_system(())\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                patched_binding,
+            )
+
         aliased_import_with_shadow = (
             "import unittest\n"
             "from cosmo_core.e8 import validate_e8_root_system as imported_validate\n"
@@ -868,6 +925,18 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             source_domains,
         )
 
+    def test_documentary_anchor_ignores_latex_comments(self) -> None:
+        namespace = self.load_validator_namespace()
+        strip_comments = cast(
+            Callable[[str, str], str],
+            namespace["strip_public_nonrendered_comments"],
+        )
+        rendered = strip_comments(
+            "sample.tex",
+            "% COSMO-D-004 supporting passage removed\n",
+        )
+        self.assertNotIn("COSMO-D-004", rendered)
+
     def test_d004_provenance_anchor_is_claim_specific(self) -> None:
         ledger = self.load_ledger()
         claim = next(
@@ -921,6 +990,22 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "Spin(8) causes HPV16 capsid assembly.",
                 claim_classes,
             )
+
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                (
+                    "Spin(8) triality controls the assembly of "
+                    "HPV16 capsids."
+                ),
+                claim_classes,
+            )
+
+        validate_public_claim_text(
+            "README.md",
+            "Spin(8) has triality and HPV16 causes cervical cancer.",
+            claim_classes,
+        )
 
         for causal_verb in ("controls", "regulates", "modulates", "governs"):
             with self.subTest(causal_verb=causal_verb):
@@ -1015,6 +1100,47 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 (
                     "Spin(8) tria<em></em>lity causes "
                     "H<em></em>PV16 cap<em></em>sid assembly."
+                ),
+                claim_classes,
+            )
+
+    def test_public_claim_guard_handles_quoted_greater_than_in_html(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    'Spin<span title="1 > 0"></span>(8) '
+                    'tria<span title="1 > 0"></span>lity causes '
+                    'H<span title="1 > 0"></span>PV16 capsid assembly.'
+                ),
+                claim_classes,
+            )
+
+    def test_public_heading_does_not_govern_following_paragraph(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    "# COSMO-D-012\n"
+                    "Spin(8) triality causes HPV16 capsid assembly.\n"
                 ),
                 claim_classes,
             )
@@ -1143,6 +1269,12 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             claim_classes,
         )
 
+        validate_public_claim_text(
+            "README.md",
+            "Spin(8) triality fails to cause HPV16 capsid assembly.",
+            claim_classes,
+        )
+
         with self.assertRaises(SystemExit):
             validate_public_claim_text(
                 "README.md",
@@ -1228,6 +1360,34 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         validate_public_claim_text(
             "sample.md",
             "    Spin(8) triality causes HPV16 capsid assembly.\n",
+            {},
+        )
+
+    def test_public_claim_scan_preserves_list_continuation_prose(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    "- Context\n"
+                    "    Spin(8) triality causes HPV16 capsid assembly.\n"
+                ),
+                {},
+            )
+
+    def test_public_claim_scan_ignores_markdown_reference_destinations(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        validate_public_claim_text(
+            "sample.md",
+            "[ref]: https://example.com/triality-causes-HPV16-capsid\n",
             {},
         )
 
@@ -1349,6 +1509,10 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "README.md").write_text("readme\n", encoding="utf-8")
+            (root / "EXTRA.markdown").write_text(
+                "public markdown\n",
+                encoding="utf-8",
+            )
             (root / "NEW_PUBLIC.md").write_text(
                 "Spin(8) triality causes HPV16 capsid assembly.\n",
                 encoding="utf-8",
@@ -1371,6 +1535,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             self.assertEqual(
                 discover_paths(root),
                 (
+                    "EXTRA.markdown",
                     "NEW_PUBLIC.md",
                     "README.md",
                     "audit/AUDIT-RESOLUTION.md",
