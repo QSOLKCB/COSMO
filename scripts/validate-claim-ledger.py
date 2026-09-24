@@ -106,7 +106,7 @@ PUBLIC_GOVERNED_PATHS = (
 )
 PUBLIC_DOMAIN_PATTERNS: dict[str, re.Pattern[str]] = {
     "mathematics": re.compile(
-        r"\b(?:Spin\(8\)|triality|E8|E_8|Weyl)\b",
+        r"(?:(?<!\w)Spin\(8\)(?!\w)|\b(?:triality|E8|E_8|Weyl)\b)",
         re.IGNORECASE,
     ),
     "biomedicine": re.compile(
@@ -1076,7 +1076,61 @@ def public_assertion_is_negated(
     ):
         prefix_start = boundary.end()
     predicate_prefix = text[prefix_start:assertion.start()]
-    return PUBLIC_NEGATION_RE.search(predicate_prefix) is not None
+    if PUBLIC_NEGATION_RE.search(predicate_prefix) is not None:
+        return True
+
+    suffix = text[assertion.end():]
+    suffix_boundary = re.search(
+        r"(?:[.!?;,]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
+        suffix,
+        re.IGNORECASE,
+    )
+    if suffix_boundary is not None:
+        suffix = suffix[:suffix_boundary.start()]
+    return re.match(
+        r"^\s*(?:no|not|never|without)\b",
+        suffix,
+        re.IGNORECASE,
+    ) is not None
+
+
+def _blank_non_newlines(value: str) -> str:
+    """Replace comment content with spaces while preserving line structure."""
+    return "".join("\n" if character == "\n" else " " for character in value)
+
+
+def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
+    """Remove Markdown HTML and LaTeX comments before public-claim scanning."""
+    text = re.sub(
+        r"<!--[\s\S]*?(?:-->|$)",
+        lambda match: _blank_non_newlines(match.group(0)),
+        text,
+    )
+    if not path_text.endswith(".tex"):
+        return text
+
+    lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        comment_start: int | None = None
+        for index, character in enumerate(line):
+            if character != "%":
+                continue
+            backslashes = 0
+            cursor = index - 1
+            while cursor >= 0 and line[cursor] == "\\":
+                backslashes += 1
+                cursor -= 1
+            if backslashes % 2 == 0:
+                comment_start = index
+                break
+        if comment_start is None:
+            lines.append(line)
+            continue
+        lines.append(
+            line[:comment_start]
+            + _blank_non_newlines(line[comment_start:])
+        )
+    return "".join(lines)
 
 
 def validate_public_claim_text(
@@ -1084,8 +1138,9 @@ def validate_public_claim_text(
     text: str,
     claim_classes: dict[str, str],
 ) -> None:
-    """Require each positive cross-domain assertion to carry its own ledger ID."""
-    paragraphs = re.split(r"\n\s*\n", text)
+    """Require each rendered positive cross-domain assertion to carry its own ID."""
+    rendered_text = strip_public_nonrendered_comments(path_text, text)
+    paragraphs = re.split(r"\n\s*\n", rendered_text)
     for paragraph_number, paragraph in enumerate(paragraphs, start=1):
         compact = " ".join(paragraph.split())
         if not compact:
