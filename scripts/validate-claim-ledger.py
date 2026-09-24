@@ -353,6 +353,65 @@ def validate_repository_path(path_text: str, claim_id: str) -> Path:
     return resolved
 
 
+def strip_lean_comments(text: str) -> str:
+    """Remove Lean line/block comments while preserving line structure."""
+    result: list[str] = []
+    index = 0
+    block_depth = 0
+    in_string = False
+
+    while index < len(text):
+        if block_depth:
+            if text.startswith("/-", index):
+                result.extend((" ", " "))
+                block_depth += 1
+                index += 2
+                continue
+            if text.startswith("-/", index):
+                result.extend((" ", " "))
+                block_depth -= 1
+                index += 2
+                continue
+
+            character = text[index]
+            result.append("\n" if character == "\n" else " ")
+            index += 1
+            continue
+
+        character = text[index]
+        if in_string:
+            result.append(character)
+            if character == "\\" and index + 1 < len(text):
+                result.append(text[index + 1])
+                index += 2
+                continue
+            if character == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if text.startswith("--", index):
+            result.extend((" ", " "))
+            index += 2
+            while index < len(text) and text[index] != "\n":
+                result.append(" ")
+                index += 1
+            continue
+
+        if text.startswith("/-", index):
+            result.extend((" ", " "))
+            block_depth = 1
+            index += 2
+            continue
+
+        result.append(character)
+        if character == '"':
+            in_string = True
+        index += 1
+
+    return "".join(result)
+
+
 def validate_formal_provenance_target(
     claim_id: str,
     path_text: str,
@@ -371,7 +430,8 @@ def validate_formal_provenance_target(
     declaration = re.compile(
         rf"(?m)^\s*theorem\s+{theorem_name}\b"
     )
-    if declaration.search(text) is None:
+    comment_free_text = strip_lean_comments(text)
+    if declaration.search(comment_free_text) is None:
         fail(
             f"{claim_id} FORMAL anchor does not identify a Lean theorem "
             f"declaration in {path_text}"
@@ -706,6 +766,33 @@ def paragraph_domains(text: str) -> set[str]:
     }
 
 
+def public_assertion_is_negated(
+    text: str,
+    assertion: re.Match[str],
+) -> bool:
+    """Return whether a negation belongs to the assertion's local clause."""
+    left_boundary = 0
+    for boundary in re.finditer(
+        r"(?:[.!?;]|\b(?:but|however|yet)\b)",
+        text[:assertion.start()],
+        re.IGNORECASE,
+    ):
+        left_boundary = boundary.end()
+
+    right_match = re.search(
+        r"(?:[.!?;]|\b(?:but|however|yet)\b)",
+        text[assertion.end():],
+        re.IGNORECASE,
+    )
+    if right_match is None:
+        right_boundary = len(text)
+    else:
+        right_boundary = assertion.end() + right_match.start()
+
+    clause = text[left_boundary:right_boundary]
+    return PUBLIC_NEGATION_RE.search(clause) is not None
+
+
 def validate_public_claim_text(
     path_text: str,
     text: str,
@@ -727,9 +814,13 @@ def validate_public_claim_text(
         domains = paragraph_domains(compact)
         if len(domains) < 2:
             continue
-        if PUBLIC_ASSERTION_RE.search(compact) is None:
+        assertions = list(PUBLIC_ASSERTION_RE.finditer(compact))
+        if not assertions:
             continue
-        if PUBLIC_NEGATION_RE.search(compact) is not None:
+        if all(
+            public_assertion_is_negated(compact, assertion)
+            for assertion in assertions
+        ):
             continue
         present_ids = set(CLAIM_ID_SEARCH.findall(compact))
         if not present_ids:
