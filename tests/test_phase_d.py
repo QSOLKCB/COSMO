@@ -252,6 +252,21 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 },
             )
 
+        with self.assertRaises(SystemExit):
+            validate_falsification(
+                "COSMO-D-999",
+                {
+                    "protocol": "TBD TBD TBD TBD TBD TBD TBD TBD TBD TBD TBD TBD",
+                    "rejection_condition": (
+                        "TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO"
+                    ),
+                    "controls": [
+                        "placeholder one",
+                        "placeholder two",
+                    ],
+                },
+            )
+
         ledger = self.load_ledger()
         claim = next(
             claim for claim in ledger["claims"]
@@ -597,6 +612,25 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 unreachable,
             )
 
+        disabled_by_module_constant = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "RUN_CLAIMED_EVIDENCE = False\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        if RUN_CLAIMED_EVIDENCE:\n"
+            "            validate_e8_root_system()\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                disabled_by_module_constant,
+            )
+
     def test_implementation_provenance_requires_executable_project_source(self) -> None:
         namespace = self.load_validator_namespace()
         validate_implementation = cast(
@@ -610,6 +644,36 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "def validate_e8_root_system",
                 "Phase B3\n",
             )
+
+    def test_scientific_statement_is_bound_to_reviewed_proposition(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_statement = cast(
+            Callable[[str, str], None],
+            namespace["validate_reviewed_scientific_statement"],
+        )
+        ledger = self.load_ledger()
+        claim = next(
+            claim for claim in ledger["claims"]
+            if claim["id"] == "COSMO-D-006"
+        )
+        validate_statement(claim["id"], claim["statement"])
+        with self.assertRaises(SystemExit):
+            validate_statement(
+                "COSMO-D-006",
+                "HPV16 RefSeq NC_001526.4 is a vaccine that cures every cancer.",
+            )
+
+    def test_reviewed_claim_inventory_rejects_deleted_claim(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_inventory = cast(
+            Callable[[set[str]], None],
+            namespace["validate_reviewed_claim_inventory"],
+        )
+        claim_ids = {claim["id"] for claim in self.load_ledger()["claims"]}
+        validate_inventory(claim_ids)
+        claim_ids.remove("COSMO-D-003")
+        with self.assertRaises(SystemExit):
+            validate_inventory(claim_ids)
 
     def test_scientific_claim_rejects_unrelated_domain_source(self) -> None:
         namespace = self.load_validator_namespace()
@@ -753,6 +817,19 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 ),
                 claim_classes,
             )
+
+    def test_public_claim_guard_decodes_character_references(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        encoded = (
+            "Spin&#40;8&#41; tria&#108;ity causes "
+            "HPV&#49;6 cap&#115;id assembly."
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text("sample.md", encoded, {})
 
     def test_public_claim_guard_scans_markdown_table_cells(self) -> None:
         namespace = self.load_validator_namespace()
