@@ -1,5 +1,6 @@
 import json
 import runpy
+from copy import deepcopy
 import subprocess
 import sys
 import unittest
@@ -162,6 +163,124 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             claim["provenance"][0]["anchor"],
             "COSMO-D-008",
         )
+
+    def test_raw_html_is_escaped_in_canonical_markdown(self) -> None:
+        namespace = self.load_validator_namespace()
+        render_index = cast(
+            Callable[[dict[str, Any]], str],
+            namespace["render_index"],
+        )
+        ledger = deepcopy(self.load_ledger())
+        ledger["claims"][0]["statement"] = "<!--"
+
+        rendered = render_index(ledger)
+        self.assertNotIn("<!--", rendered)
+        self.assertIn("&lt;!--", rendered)
+
+    def test_source_url_requires_https_authority(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_source_url = cast(
+            Callable[[str, object], Any],
+            namespace["validate_source_url"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_source_url("SRC-TEST", "https://")
+
+    def test_source_identifiers_must_match_canonical_url(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_source_url = cast(
+            Callable[[str, object], Any],
+            namespace["validate_source_url"],
+        )
+        crosscheck = cast(
+            Callable[[str, Any, dict[str, str]], None],
+            namespace["crosscheck_identifiers_with_url"],
+        )
+        parsed = validate_source_url(
+            "SRC-TEST",
+            "https://pmc.ncbi.nlm.nih.gov/articles/PMC11158331/",
+        )
+        with self.assertRaises(SystemExit):
+            crosscheck(
+                "SRC-TEST",
+                parsed,
+                {"PMCID": "PMC11158332"},
+            )
+
+    def test_d010_provenance_anchor_is_claim_specific(self) -> None:
+        ledger = self.load_ledger()
+        claim = next(
+            claim for claim in ledger["claims"]
+            if claim["id"] == "COSMO-D-010"
+        )
+        self.assertEqual(
+            claim["provenance"][0]["anchor"],
+            "COSMO-D-010",
+        )
+
+    def test_hypothesis_falsification_is_structured_and_substantive(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_falsification = cast(
+            Callable[[str, object], dict[str, Any]],
+            namespace["validate_falsification"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_falsification(
+                "COSMO-D-999",
+                {
+                    "protocol": "TBD",
+                    "rejection_condition": (
+                        "Reject if the declared evaluation threshold is not met."
+                    ),
+                    "controls": [
+                        "Matched baseline model",
+                        "Held-out evaluation set",
+                    ],
+                },
+            )
+
+        ledger = self.load_ledger()
+        claim = next(
+            claim for claim in ledger["claims"]
+            if claim["id"] == "COSMO-D-012"
+        )
+        result = validate_falsification(
+            claim["id"],
+            claim["falsification"],
+        )
+        self.assertEqual(
+            set(result),
+            {"protocol", "rejection_condition", "controls"},
+        )
+        self.assertGreaterEqual(len(result["controls"]), 2)
+
+    def test_formal_claim_rejects_non_kernel_provenance_role(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_provenance = cast(
+            Callable[[str, str, object], set[str]],
+            namespace["validate_provenance"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_provenance(
+                "COSMO-D-999",
+                "FORMAL",
+                [
+                    {
+                        "path": "README.md",
+                        "anchor": "Phase D claim ledger",
+                        "role": "project_note",
+                    }
+                ],
+            )
+
+    def test_source_kind_rejects_project_notes(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_source_kind = cast(
+            Callable[[str, object], str],
+            namespace["validate_source_kind"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_source_kind("SRC-TEST", "project_note")
 
     def test_hpv16_reference_accession_is_versioned(self) -> None:
         ledger = self.load_ledger()
