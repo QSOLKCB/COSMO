@@ -43,6 +43,32 @@ PINNED_SCIENTIFIC_CLAIM_SOURCES: dict[str, tuple[str, ...]] = {
     "COSMO-D-007": ("SRC-HPV16-E6E7-PMID-17645777",),
     "COSMO-D-008": ("SRC-HPV-P16-PMC8409095",),
 }
+PINNED_REVIEWED_SCIENTIFIC_STATEMENTS: dict[str, str] = {
+    "COSMO-D-004": (
+        "Spin(8) has triality symmetry with an S3 outer automorphism action "
+        "that permutes its vector and two spinor eight-dimensional representations."
+    ),
+    "COSMO-D-005": (
+        "The ambient-pressure phase of SiS2 is orthorhombic and contains chains "
+        "of distorted edge-sharing SiS4 tetrahedra."
+    ),
+    "COSMO-D-006": (
+        "The NCBI reference sequence used for human papillomavirus type 16 in "
+        "this ledger is RefSeq NC_001526.4."
+    ),
+    "COSMO-D-007": (
+        "High-risk HPV E6 and E7 proteins are established carcinogenesis factors; "
+        "E6 promotes p53 degradation and E7 disrupts pRb/E2F control."
+    ),
+    "COSMO-D-008": (
+        "p16 immunohistochemistry is used as a surrogate marker for HPV-associated "
+        "disease in some clinical contexts, but p16 positivity is not identical to "
+        "direct evidence of active E6/E7 transcription."
+    ),
+}
+PINNED_REVIEWED_CLAIM_IDS = tuple(
+    f"COSMO-D-{number:03d}" for number in range(1, 15)
+)
 PINNED_REVIEWED_SOURCE_RECORDS: dict[str, tuple[str, str, str, str]] = {
     "SRC-E8-MATHWORLD": (
         "scholarly_reference",
@@ -146,6 +172,27 @@ PLACEHOLDER_TEXT = frozenset(
         "unknown",
         "placeholder",
         "later",
+    }
+)
+PLACEHOLDER_FILLER_TOKENS = frozenset(
+    {
+        "a",
+        "condition",
+        "control",
+        "criterion",
+        "criteria",
+        "field",
+        "four",
+        "here",
+        "item",
+        "n",
+        "one",
+        "protocol",
+        "test",
+        "text",
+        "three",
+        "two",
+        "value",
     }
 )
 PUBLIC_GOVERNED_SUFFIXES = frozenset({".md", ".tex"})
@@ -308,6 +355,25 @@ def require_inline_string(value: object, label: str) -> str:
     return text
 
 
+def is_placeholder_only_text(text: str) -> bool:
+    """Detect repeated/decorated placeholder prose, not only one exact token."""
+    normalized = re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
+    if not normalized:
+        return True
+    placeholder_tokens = {
+        "tbd",
+        "todo",
+        "na",
+        "none",
+        "unknown",
+        "placeholder",
+        "later",
+    }
+    allowed = placeholder_tokens | PLACEHOLDER_FILLER_TOKENS
+    tokens = normalized.split()
+    return all(token in allowed or token.isdigit() for token in tokens)
+
+
 def require_substantive_inline(
     value: object,
     label: str,
@@ -316,7 +382,7 @@ def require_substantive_inline(
 ) -> str:
     """Reject placeholders where the governance contract requires real criteria."""
     text = require_inline_string(value, label)
-    if text.strip().lower() in PLACEHOLDER_TEXT:
+    if text.strip().lower() in PLACEHOLDER_TEXT or is_placeholder_only_text(text):
         fail(f"{label} may not be a placeholder")
     if len(text.strip()) < minimum_length:
         fail(f"{label} must contain substantive criteria")
@@ -868,28 +934,89 @@ def _statement_calls_function(
     return finder.found
 
 
+def _module_boolean_constants(module: ast.Module) -> dict[str, bool]:
+    """Collect simple module booleans only when they have one stable assignment."""
+    values: dict[str, bool] = {}
+    invalid: set[str] = set()
+
+    def record(name: str, value: ast.expr | None) -> None:
+        if (
+            name in invalid
+            or name in values
+            or not isinstance(value, ast.Constant)
+            or not isinstance(value.value, bool)
+        ):
+            invalid.add(name)
+            values.pop(name, None)
+            return
+        values[name] = value.value
+
+    for statement in module.body:
+        if isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                if isinstance(target, ast.Name):
+                    record(target.id, statement.value)
+        elif isinstance(statement, ast.AnnAssign) and isinstance(
+            statement.target,
+            ast.Name,
+        ):
+            record(statement.target.id, statement.value)
+        elif isinstance(statement, ast.AugAssign) and isinstance(
+            statement.target,
+            ast.Name,
+        ):
+            invalid.add(statement.target.id)
+            values.pop(statement.target.id, None)
+    return values
+
+
+def _static_boolean_value(
+    expression: ast.expr,
+    module_constants: dict[str, bool],
+) -> bool | None:
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, bool):
+        return expression.value
+    if isinstance(expression, ast.Name):
+        return module_constants.get(expression.id)
+    if isinstance(expression, ast.UnaryOp) and isinstance(expression.op, ast.Not):
+        operand = _static_boolean_value(expression.operand, module_constants)
+        return None if operand is None else not operand
+    return None
+
+
 def _reachable_statements_call_function(
     statements: list[ast.stmt],
     function_name: str,
+    module_constants: dict[str, bool],
 ) -> bool:
     for statement in statements:
         if isinstance(statement, (ast.Return, ast.Raise)):
             return False
 
         if isinstance(statement, ast.If):
-            if isinstance(statement.test, ast.Constant):
-                branch = statement.body if bool(statement.test.value) else statement.orelse
-                if _reachable_statements_call_function(branch, function_name):
+            condition = _static_boolean_value(
+                statement.test,
+                module_constants,
+            )
+            if condition is not None:
+                branch = statement.body if condition else statement.orelse
+                if _reachable_statements_call_function(
+                    branch,
+                    function_name,
+                    module_constants,
+                ):
                     return True
             else:
                 if _reachable_statements_call_function(
                     statement.body,
                     function_name,
+                    module_constants,
                 ):
                     return True
                 if _reachable_statements_call_function(
                     statement.orelse,
                     function_name,
+                    module_constants,
                 ):
                     return True
             continue
@@ -902,10 +1029,12 @@ def _reachable_statements_call_function(
 def _regression_calls_function(
     method: ast.FunctionDef,
     function_name: str,
+    module_constants: dict[str, bool],
 ) -> bool:
     return _reachable_statements_call_function(
         method.body,
         function_name,
+        module_constants,
     )
 
 
@@ -948,7 +1077,12 @@ def validate_computational_evidence_connection(
             f"does not import {function_name} from declared implementation "
             f"{implementation_path}"
         )
-    if not _regression_calls_function(method, function_name):
+    module_constants = _module_boolean_constants(regression_tree)
+    if not _regression_calls_function(
+        method,
+        function_name,
+        module_constants,
+    ):
         fail(
             f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
             f"does not call declared implementation function {function_name}"
@@ -1650,7 +1784,9 @@ def validate_public_claim_text(
     claim_classes: dict[str, str],
 ) -> None:
     """Require each rendered positive cross-domain assertion to carry its own ID."""
-    rendered_text = strip_public_nonrendered_comments(path_text, text)
+    rendered_text = html.unescape(
+        strip_public_nonrendered_comments(path_text, text)
+    )
     paragraphs = re.split(r"\n\s*\n", rendered_text)
     for paragraph_number, paragraph in enumerate(paragraphs, start=1):
         compact = " ".join(paragraph.split())
@@ -1713,6 +1849,32 @@ def validate_public_claim_text(
                     f"uses claim IDs {sorted(present_ids)} whose evidence "
                     "classes cannot govern a cross-domain bridge"
                 )
+
+
+def validate_reviewed_scientific_statement(
+    claim_id: str,
+    statement: str,
+) -> None:
+    """Bind each reviewed scientific source set to its reviewed proposition."""
+    expected = PINNED_REVIEWED_SCIENTIFIC_STATEMENTS.get(claim_id)
+    if expected is None:
+        fail(f"{claim_id} SCIENTIFIC claim lacks a reviewed statement binding")
+    if statement != expected:
+        fail(
+            f"{claim_id} SCIENTIFIC statement differs from its reviewed "
+            "source-bound proposition"
+        )
+
+
+def validate_reviewed_claim_inventory(claim_ids: set[str]) -> None:
+    """Keep every reviewed Phase D claim present until the pins are reviewed."""
+    missing = [
+        claim_id
+        for claim_id in PINNED_REVIEWED_CLAIM_IDS
+        if claim_id not in claim_ids
+    ]
+    if missing:
+        fail(f"reviewed claim inventory is missing {missing}")
 
 
 def validate_scientific_sources(
@@ -1862,7 +2024,7 @@ def validate() -> None:
                 f"{evidence_class}; allowed={sorted(allowed)}"
             )
 
-        require_inline_string(
+        statement = require_inline_string(
             claim.get("statement"),
             f"{claim_id} statement",
         )
@@ -1897,6 +2059,7 @@ def validate() -> None:
         falsification = claim.get("falsification")
         raw_claim_domain = claim.get("domain")
         if evidence_class == "SCIENTIFIC":
+            validate_reviewed_scientific_statement(claim_id, statement)
             claim_domain = validate_source_domain(
                 claim_id,
                 raw_claim_domain,
@@ -1928,6 +2091,7 @@ def validate() -> None:
                 f"{claim_id} non-SYMBOLIC claim may not set empirical_status"
             )
 
+    validate_reviewed_claim_inventory(claim_ids)
     validate_public_documents(claim_classes)
 
     try:
