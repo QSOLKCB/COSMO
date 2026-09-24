@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import ast
 import html
 import json
 import re
+import runpy
+import unittest
 from pathlib import Path
 from typing import Any, Never, cast
 from urllib.parse import SplitResult, urlsplit
@@ -13,12 +16,19 @@ from urllib.parse import SplitResult, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER_PATH = ROOT / "claims" / "claim-ledger.json"
 INDEX_PATH = ROOT / "CLAIM-LEDGER.md"
+PROTECTED_LEAN_COMPILE_SCRIPT = ROOT / "scripts" / "run-lean-verified-reuse-ci.sh"
 
 CLASSES = ("FORMAL", "COMPUTATIONAL", "SCIENTIFIC", "HYPOTHESIS", "SYMBOLIC")
 CLAIM_ID = re.compile(r"COSMO-D-[0-9]{3}$")
 CLAIM_ID_SEARCH = re.compile(r"\bCOSMO-D-[0-9]{3}\b")
 SOURCE_ID = re.compile(r"SRC-[A-Z0-9][A-Z0-9._-]*$")
-LEAN_THEOREM_ANCHOR = re.compile(r"theorem ([A-Za-z_][A-Za-z0-9_']*)$")
+LEAN_THEOREM_ANCHOR = re.compile(
+    r"theorem ([A-Za-z_][A-Za-z0-9_']*)\\b.+:=\\s*by$"
+)
+PROTECTED_LEAN_SOURCE_RE = re.compile(
+    r"(?m)^compile_project_module\\s+([A-Za-z0-9_./-]+\\.lean)\\s+"
+)
+PUBLIC_CROSS_DOMAIN_GOVERNING_CLASSES = frozenset({"HYPOTHESIS", "SYMBOLIC"})
 IDENTIFIER_PATTERNS: dict[str, re.Pattern[str]] = {
     "PMID": re.compile(r"[1-9][0-9]{0,7}$"),
     "PMCID": re.compile(r"PMC[1-9][0-9]*$"),
@@ -124,6 +134,17 @@ class DuplicateJsonKeyError(ValueError):
     """Raised when canonical JSON contains the same object key twice."""
 
 
+class NonStandardJsonConstantError(ValueError):
+    """Raised when Python's permissive JSON parser sees NaN/Infinity."""
+
+
+def reject_nonstandard_json_constant(value: str) -> Never:
+    """Reject constants forbidden by RFC 8259 JSON."""
+    raise NonStandardJsonConstantError(
+        f"non-standard JSON constant {value!r}"
+    )
+
+
 def fail(message: str) -> Never:
     raise SystemExit(f"claim-ledger validation failed: {message}")
 
@@ -146,8 +167,13 @@ def parse_json_text(text: str) -> dict[str, Any]:
         raw: object = json.loads(
             text,
             object_pairs_hook=reject_duplicate_object_pairs,
+            parse_constant=reject_nonstandard_json_constant,
         )
-    except (json.JSONDecodeError, DuplicateJsonKeyError) as exc:
+    except (
+        json.JSONDecodeError,
+        DuplicateJsonKeyError,
+        NonStandardJsonConstantError,
+    ) as exc:
         fail(f"invalid canonical JSON: {exc}")
     if not isinstance(raw, dict):
         fail("ledger root must be an object")
@@ -412,29 +438,140 @@ def strip_lean_comments(text: str) -> str:
     return "".join(result)
 
 
+def protected_lean_sources() -> set[str]:
+    """Return sources compiled into the protected Lean audit closure."""
+    try:
+        script = PROTECTED_LEAN_COMPILE_SCRIPT.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        fail(f"cannot read protected Lean compile script: {exc}")
+    sources = set(PROTECTED_LEAN_SOURCE_RE.findall(script))
+    if not sources:
+        fail("protected Lean compile script declares no project modules")
+    return sources
+
+
+def normalize_lean_declaration(text: str) -> str:
+    """Normalize insignificant whitespace for one Lean declaration anchor."""
+    return " ".join(text.split())
+
+
 def validate_formal_provenance_target(
     claim_id: str,
     path_text: str,
     anchor: str,
     text: str,
 ) -> None:
-    """Bind kernel_checked_theorem role to an actual Lean theorem declaration."""
+    """Bind FORMAL evidence to an exact theorem in the protected Lean closure."""
     if not path_text.endswith(".lean"):
         fail(f"{claim_id} FORMAL provenance must point to a .lean source file")
-    match = LEAN_THEOREM_ANCHOR.fullmatch(anchor)
-    if match is None:
+    if path_text not in protected_lean_sources():
         fail(
-            f"{claim_id} FORMAL anchor must have form 'theorem <name>'"
+            f"{claim_id} FORMAL provenance {path_text!r} is not compiled "
+            "by the protected Lean integrity pipeline"
         )
-    theorem_name = re.escape(match.group(1))
-    declaration = re.compile(
-        rf"(?m)^\s*theorem\s+{theorem_name}\b"
-    )
-    comment_free_text = strip_lean_comments(text)
-    if declaration.search(comment_free_text) is None:
+    if LEAN_THEOREM_ANCHOR.fullmatch(anchor) is None:
         fail(
-            f"{claim_id} FORMAL anchor does not identify a Lean theorem "
-            f"declaration in {path_text}"
+            f"{claim_id} FORMAL anchor must contain the complete theorem "
+            "declaration through ':= by'"
+        )
+    comment_free_text = strip_lean_comments(text)
+    normalized_source = normalize_lean_declaration(comment_free_text)
+    normalized_anchor = normalize_lean_declaration(anchor)
+    if normalized_anchor not in normalized_source:
+        fail(
+            f"{claim_id} FORMAL anchor does not identify the exact Lean "
+            f"theorem proposition in {path_text}"
+        )
+
+
+def locate_unittest_regression(
+    claim_id: str,
+    path_text: str,
+    anchor: str,
+    text: str,
+) -> str:
+    """Locate exactly one unittest method used as regression evidence."""
+    if not path_text.startswith("tests/") or not Path(path_text).name.startswith("test_"):
+        fail(
+            f"{claim_id} regression provenance must point to a tests/test_*.py file"
+        )
+    if not anchor.startswith("test_"):
+        fail(f"{claim_id} regression anchor must name a unittest test method")
+    try:
+        tree = ast.parse(text, filename=path_text)
+    except SyntaxError as exc:
+        fail(f"{claim_id} regression source {path_text} is invalid Python: {exc}")
+
+    matches: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for member in node.body:
+            if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if member.name == anchor:
+                    matches.append(node.name)
+    if len(matches) != 1:
+        fail(
+            f"{claim_id} regression anchor {anchor!r} must identify exactly "
+            f"one unittest method in {path_text}"
+        )
+    return matches[0]
+
+
+def validate_computational_regression_target(
+    claim_id: str,
+    path_text: str,
+    anchor: str,
+    path: Path,
+    text: str,
+) -> None:
+    """Execute the exact unittest method claimed as computational evidence."""
+    class_name = locate_unittest_regression(
+        claim_id,
+        path_text,
+        anchor,
+        text,
+    )
+    try:
+        namespace = runpy.run_path(
+            str(path),
+            run_name=f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
+        )
+    except Exception as exc:
+        fail(
+            f"{claim_id} cannot load regression evidence {path_text}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    case_type = namespace.get(class_name)
+    if not isinstance(case_type, type) or not issubclass(case_type, unittest.TestCase):
+        fail(
+            f"{claim_id} regression class {class_name!r} is not a unittest.TestCase"
+        )
+    case = case_type(anchor)
+    result = unittest.TestResult()
+    case.run(result)
+
+    if result.testsRun != 1:
+        fail(
+            f"{claim_id} regression evidence {path_text}:{anchor} did not "
+            "execute exactly once"
+        )
+    if result.skipped:
+        fail(
+            f"{claim_id} regression evidence {path_text}:{anchor} is skipped"
+        )
+    if result.expectedFailures:
+        fail(
+            f"{claim_id} regression evidence {path_text}:{anchor} is marked "
+            "as an expected failure"
+        )
+    if result.failures or result.errors or result.unexpectedSuccesses:
+        details = result.failures + result.errors
+        rendered = details[0][1].splitlines()[-1] if details else "unexpected success"
+        fail(
+            f"{claim_id} regression evidence {path_text}:{anchor} did not pass: "
+            f"{rendered}"
         )
 
 
@@ -476,8 +613,6 @@ def validate_provenance(
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
             fail(f"{claim_id} provenance path {path_text!r} unreadable: {exc}")
-        if anchor not in text:
-            fail(f"{claim_id} anchor {anchor!r} not found in {path_text}")
         if evidence_class == "FORMAL":
             validate_formal_provenance_target(
                 claim_id,
@@ -485,6 +620,17 @@ def validate_provenance(
                 anchor,
                 text,
             )
+        else:
+            if anchor not in text:
+                fail(f"{claim_id} anchor {anchor!r} not found in {path_text}")
+            if evidence_class == "COMPUTATIONAL" and role == "regression":
+                validate_computational_regression_target(
+                    claim_id,
+                    path_text,
+                    anchor,
+                    path,
+                    text,
+                )
 
     if evidence_class == "FORMAL" and "kernel_checked_theorem" not in roles:
         fail(f"{claim_id} FORMAL claim requires kernel-checked theorem evidence")
@@ -792,22 +938,54 @@ def public_assertion_clause(
     return text[left_boundary:right_boundary]
 
 
+def public_assertion_binding_scope(
+    text: str,
+    assertion: re.Match[str],
+) -> str:
+    """Return the punctuation-bounded proposition used to bind a claim ID."""
+    left_boundary = 0
+    for boundary in re.finditer(
+        r"(?:[.!?;,]|\\b(?:but|however|yet|although|though|while|whereas)\\b)",
+        text[:assertion.start()],
+        re.IGNORECASE,
+    ):
+        left_boundary = boundary.end()
+
+    right_match = re.search(
+        r"(?:[.!?;,]|\\b(?:but|however|yet)\\b)",
+        text[assertion.end():],
+        re.IGNORECASE,
+    )
+    if right_match is None:
+        right_boundary = len(text)
+    else:
+        right_boundary = assertion.end() + right_match.start()
+    return text[left_boundary:right_boundary]
+
+
 def public_assertion_is_negated(
     text: str,
     assertion: re.Match[str],
 ) -> bool:
-    """Return whether a negation belongs to the assertion's local clause."""
-    clause = public_assertion_clause(text, assertion)
-    return PUBLIC_NEGATION_RE.search(clause) is not None
+    """Return whether negation locally governs the assertion predicate."""
+    prefix_start = 0
+    for boundary in re.finditer(
+        r"(?:[.!?;,]|\\b(?:and|but|however|yet|although|though|while|whereas)\\b)",
+        text[:assertion.start()],
+        re.IGNORECASE,
+    ):
+        prefix_start = boundary.end()
+    predicate_prefix = text[prefix_start:assertion.start()]
+    return PUBLIC_NEGATION_RE.search(predicate_prefix) is not None
 
 
 def validate_public_claim_text(
     path_text: str,
     text: str,
-    claim_ids: set[str],
+    claim_classes: dict[str, str],
 ) -> None:
-    """Reject unledgered positive cross-domain causal/mechanistic assertions."""
-    paragraphs = re.split(r"\n\s*\n", text)
+    """Require each positive cross-domain assertion to carry its own ledger ID."""
+    paragraphs = re.split(r"\\n\\s*\\n", text)
     for paragraph_number, paragraph in enumerate(paragraphs, start=1):
         compact = " ".join(paragraph.split())
         if not compact:
@@ -819,36 +997,43 @@ def validate_public_claim_text(
             or compact.startswith("|")
         ):
             continue
-        domains = paragraph_domains(compact)
-        if len(domains) < 2:
+        if len(paragraph_domains(compact)) < 2:
             continue
-        assertions = list(PUBLIC_ASSERTION_RE.finditer(compact))
-        positive_cross_domain_assertions: list[re.Match[str]] = []
-        assertion_domains: set[str] = set()
-        for assertion in assertions:
+
+        for assertion in PUBLIC_ASSERTION_RE.finditer(compact):
             clause = public_assertion_clause(compact, assertion)
             local_domains = paragraph_domains(clause)
             if len(local_domains) < 2:
                 continue
             if public_assertion_is_negated(compact, assertion):
                 continue
-            positive_cross_domain_assertions.append(assertion)
-            assertion_domains.update(local_domains)
-        if not positive_cross_domain_assertions:
-            continue
-        present_ids = set(CLAIM_ID_SEARCH.findall(compact))
-        if not present_ids:
-            fail(
-                f"{path_text} paragraph {paragraph_number} contains an "
-                "unledgered positive cross-domain assertion involving "
-                f"{sorted(domains)}"
-            )
-        unknown = present_ids - claim_ids
-        if unknown:
-            fail(
-                f"{path_text} paragraph {paragraph_number} references "
-                f"unknown claim IDs {sorted(unknown)}"
-            )
+
+            binding_scope = public_assertion_binding_scope(compact, assertion)
+            present_ids = set(CLAIM_ID_SEARCH.findall(binding_scope))
+            if not present_ids:
+                fail(
+                    f"{path_text} paragraph {paragraph_number} contains an "
+                    "unledgered positive cross-domain assertion involving "
+                    f"{sorted(local_domains)}"
+                )
+            unknown = present_ids - set(claim_classes)
+            if unknown:
+                fail(
+                    f"{path_text} paragraph {paragraph_number} assertion "
+                    f"references unknown claim IDs {sorted(unknown)}"
+                )
+            governing_ids = {
+                claim_id
+                for claim_id in present_ids
+                if claim_classes[claim_id]
+                in PUBLIC_CROSS_DOMAIN_GOVERNING_CLASSES
+            }
+            if not governing_ids:
+                fail(
+                    f"{path_text} paragraph {paragraph_number} assertion "
+                    f"uses claim IDs {sorted(present_ids)} whose evidence "
+                    "classes cannot govern a cross-domain bridge"
+                )
 
 
 def validate_scientific_sources(
@@ -875,7 +1060,7 @@ def validate_scientific_sources(
             )
 
 
-def validate_public_documents(claim_ids: set[str]) -> None:
+def validate_public_documents(claim_classes: dict[str, str]) -> None:
     """Apply the public cross-domain claim-ID guard to governed documents."""
     for path_text in PUBLIC_GOVERNED_PATHS:
         path = ROOT / path_text
@@ -883,7 +1068,7 @@ def validate_public_documents(claim_ids: set[str]) -> None:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
             fail(f"cannot read governed public document {path_text}: {exc}")
-        validate_public_claim_text(path_text, text, claim_ids)
+        validate_public_claim_text(path_text, text, claim_classes)
 
 
 def validate() -> None:
@@ -926,6 +1111,7 @@ def validate() -> None:
         validate_primary_source_url(source_id, parsed, identifier_urls)
 
     claim_ids: set[str] = set()
+    claim_classes: dict[str, str] = {}
     previous_number = 0
     for claim in claims:
         if not isinstance(claim, dict):
@@ -947,6 +1133,7 @@ def validate() -> None:
         )
         if evidence_class not in CLASSES:
             fail(f"{claim_id} has invalid evidence class")
+        claim_classes[claim_id] = evidence_class
         status = require_inline_string(
             claim.get("status"),
             f"{claim_id} status",
@@ -1024,7 +1211,7 @@ def validate() -> None:
                 f"{claim_id} non-SYMBOLIC claim may not set empirical_status"
             )
 
-    validate_public_documents(claim_ids)
+    validate_public_documents(claim_classes)
 
     try:
         index_text = INDEX_PATH.read_text(encoding="utf-8")
