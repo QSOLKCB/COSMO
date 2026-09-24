@@ -317,6 +317,31 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 },
             )
 
+    def test_identifier_free_reviewed_source_record_is_pinned(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_record = cast(
+            Callable[[str, str, str, str, str], None],
+            namespace["validate_reviewed_source_record"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_record(
+                "SRC-SPIN8-PTEP-2021",
+                "scholarly_article",
+                "Unrelated mathematics article",
+                "https://example.com/unrelated",
+                "mathematics",
+            )
+        validate_record(
+            "SRC-SPIN8-PTEP-2021",
+            "scholarly_article",
+            (
+                "Vertex operator superalgebra/sigma model correspondences: "
+                "The four-torus case"
+            ),
+            "https://academic.oup.com/ptep/article/2021/8/08B102/6353037",
+            "mathematics",
+        )
+
     def test_multi_accession_crosswalk_rejects_unrelated_article_ids(self) -> None:
         namespace = self.load_validator_namespace()
         validate_crosswalk = cast(
@@ -554,6 +579,24 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 regression_text,
             )
 
+        method_header = (
+            "    def test_root_system_report_has_rank_eight_and_norm_two(self) -> None:\n"
+        )
+        unreachable = regression_text.replace(
+            method_header,
+            method_header + "        return\n",
+            1,
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_phase_b3.py",
+                "test_root_system_report_has_rank_eight_and_norm_two",
+                unreachable,
+            )
+
     def test_implementation_provenance_requires_executable_project_source(self) -> None:
         namespace = self.load_validator_namespace()
         validate_implementation = cast(
@@ -728,6 +771,48 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 {},
             )
 
+    def test_public_claim_guard_scans_latex_table_cells(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                (
+                    "\\begin{tabular}{ll}\n"
+                    "Spin(8) triality causes HPV16 capsid assembly. & open \\\\n"
+                    "\\end{tabular}\n"
+                ),
+                {},
+            )
+
+    def test_public_claim_guard_expands_repository_latex_macros(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                r"\TRI causes \HPV capsid assembly.",
+                {},
+            )
+
+    def test_public_claim_domains_are_proposition_local(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        validate_public_claim_text(
+            "sample.md",
+            "Spin(8) is a mathematical group, while HPV16 causes cancer.",
+            {},
+        )
+
     def test_public_negation_only_suppresses_its_own_assertion(self) -> None:
         namespace = self.load_validator_namespace()
         validate_public_claim_text = cast(
@@ -817,6 +902,50 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             "edge-sharing $\\mathrm{SiS_4}$ tetrahedra (COSMO-D-005)",
             source,
         )
+
+    def test_public_claim_scan_ignores_indented_markdown_code(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        validate_public_claim_text(
+            "sample.md",
+            "    Spin(8) triality causes HPV16 capsid assembly.\n",
+            {},
+        )
+
+    def test_public_claim_scan_ignores_markdown_link_destinations(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        validate_public_claim_text(
+            "sample.md",
+            (
+                "See [the source]"
+                "(https://example.com/triality-causes-HPV16-capsid)."
+            ),
+            {},
+        )
+
+    def test_public_claim_scan_rejects_unknown_ids_without_causality(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                "See COSMO-D-999 for evidence.",
+                claim_classes,
+            )
 
     def test_public_claim_scan_keeps_prose_adjacent_to_fenced_blocks(self) -> None:
         namespace = self.load_validator_namespace()
@@ -911,6 +1040,14 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             audit = root / "audit"
             audit.mkdir()
             (audit / "AUDIT-RESOLUTION.md").write_text(
+                "Spin(8) triality causes HPV16 capsid assembly.\n",
+                encoding="utf-8",
+            )
+            dependency = (
+                root / ".venv" / "lib" / "site-packages" / "review_fixture"
+            )
+            dependency.mkdir(parents=True)
+            (dependency / "README.md").write_text(
                 "Spin(8) triality causes HPV16 capsid assembly.\n",
                 encoding="utf-8",
             )
