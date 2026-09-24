@@ -116,7 +116,7 @@
 - **Sources:** SRC-SIS2-PMID-25590815
 - **Boundary:** This crystallographic fact does not support COSMO's symbolic substrate or life-code interpretation.
 - **Repository provenance:**
-  - `cosmovirus.tex` — `Silicon disulfide` (`documented_context`)
+  - `cosmovirus.tex` — `COSMO-D-005` (`documented_context`)
 
 ### COSMO-D-006 — SCIENTIFIC
 
