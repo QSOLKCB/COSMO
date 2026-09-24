@@ -94,7 +94,7 @@
       "provenance": [
         {
           "path": "cosmovirus.lean",
-          "anchor": "theorem six_step_periodic",
+          "anchor": "theorem six_step_periodic (layer : CosmoLayer) : psiIterate 6 layer = layer := by",
           "role": "kernel_checked_theorem"
         }
       ],
@@ -110,7 +110,7 @@
       "provenance": [
         {
           "path": "cosmovirus.lean",
-          "anchor": "theorem every_layer_reachable",
+          "anchor": "theorem every_layer_reachable (source target : CosmoLayer) : ReachesWithinCycle source target := by",
           "role": "kernel_checked_theorem"
         }
       ],
