@@ -513,6 +513,26 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 {"SRC-E8-MATHWORLD": "mathematics"},
             )
 
+    def test_d004_provenance_anchor_is_claim_specific(self) -> None:
+        ledger = self.load_ledger()
+        claim = next(
+            claim for claim in ledger["claims"]
+            if claim["id"] == "COSMO-D-004"
+        )
+        self.assertEqual(
+            claim["provenance"][0]["anchor"],
+            "COSMO-D-004",
+        )
+        source = (REPOSITORY_ROOT / "cosmovirus.tex").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "$8$-dimensional representations "
+            "$(\\mathbf{8}_v,\\mathbf{8}_s,\\mathbf{8}_c)$\n"
+            "(COSMO-D-004).",
+            source,
+        )
+
     def test_public_cross_domain_assertion_requires_claim_id(self) -> None:
         namespace = self.load_validator_namespace()
         validate_public_claim_text = cast(
@@ -537,6 +557,13 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             validate_public_claim_text(
                 "README.md",
                 "Spin(8) triality leads to HPV16 capsid assembly.",
+                claim_classes,
+            )
+
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                "Spin(8) causes HPV16 capsid assembly.",
                 claim_classes,
             )
 
@@ -609,12 +636,35 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
 
         validate_public_claim_text(
             "README.md",
+            "Triality causes no HPV16 capsid changes.",
+            claim_classes,
+        )
+
+        validate_public_claim_text(
+            "README.md",
             (
                 "Spin(8) is mathematical context. "
                 "HPV16 capsid assembly is biological context. "
                 "PR A proves a local integer result."
             ),
             claim_classes,
+        )
+
+    def test_public_claim_scan_ignores_nonrendered_comments(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        validate_public_claim_text(
+            "cosmovirus.tex",
+            "% Triality causes HPV16 capsid assembly.\n",
+            {},
+        )
+        validate_public_claim_text(
+            "README.md",
+            "<!-- Spin(8) causes HPV16 capsid assembly. -->\n",
+            {},
         )
 
     def test_hpv16_reference_accession_is_versioned(self) -> None:
