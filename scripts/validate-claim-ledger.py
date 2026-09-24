@@ -37,6 +37,17 @@ IDENTIFIER_PATTERNS: dict[str, re.Pattern[str]] = {
     "year": re.compile(r"(?:19|20)[0-9]{2}$"),
 }
 URL_BOUND_IDENTIFIERS = frozenset({"PMID", "PMCID", "DOI", "RefSeq"})
+PINNED_MULTI_ACCESSION_IDENTIFIERS: dict[str, dict[str, str]] = {
+    "SRC-SIS2-PMID-25590815": {
+        "PMID": "25590815",
+        "DOI": "10.1021/ic501825r",
+    },
+    "SRC-HPV16-E6E7-PMID-17645777": {
+        "PMID": "17645777",
+        "PMCID": "PMC11158331",
+    },
+}
+PYTHON_DEF_ANCHOR = re.compile(r"def ([A-Za-z_][A-Za-z0-9_]*)$")
 ALLOWED_STATUSES: dict[str, frozenset[str]] = {
     "FORMAL": frozenset({"SUPPORTED"}),
     "COMPUTATIONAL": frozenset({"SUPPORTED"}),
@@ -120,7 +131,10 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"determines?|determined|explains?|explained|proves?|proved|"
     r"demonstrates?|demonstrated|establishes?|established|"
     r"validates?|validated|predicts?|predicted|induces?|induced|"
-    r"mechanism|corresponds?\s+to|maps?\s+to|is\s+responsible\s+for)\b",
+    r"triggers?|triggered|promotes?|promoted|mediates?|mediated|"
+    r"leads?\s+to|results?\s+in|gives?\s+rise\s+to|"
+    r"contributes?\s+to|mechanism|corresponds?\s+to|maps?\s+to|"
+    r"is\s+responsible\s+for)\b",
     re.IGNORECASE,
 )
 PUBLIC_NEGATION_RE = re.compile(
@@ -302,6 +316,32 @@ def canonical_identifier_url(identifier_type: str, value: str) -> str:
     raise AssertionError(f"identifier type {identifier_type!r} is not URL-bound")
 
 
+def validate_multi_accession_identity(
+    source_id: str,
+    identifiers: dict[str, str],
+) -> None:
+    """Bind every multi-accession source to one reviewed article identity."""
+    article_identifiers = {
+        key: value
+        for key, value in identifiers.items()
+        if key in URL_BOUND_IDENTIFIERS
+    }
+    if len(article_identifiers) <= 1:
+        return
+
+    expected = PINNED_MULTI_ACCESSION_IDENTIFIERS.get(source_id)
+    if expected is None:
+        fail(
+            f"{source_id} multi-accession record lacks a reviewed "
+            "crosswalk in the validator"
+        )
+    if article_identifiers != expected:
+        fail(
+            f"{source_id} identifiers do not match the reviewed "
+            f"multi-accession crosswalk: expected {expected!r}"
+        )
+
+
 def validate_identifier_urls(
     source_id: str,
     identifiers: dict[str, str],
@@ -380,7 +420,7 @@ def validate_repository_path(path_text: str, claim_id: str) -> Path:
 
 
 def strip_lean_comments(text: str) -> str:
-    """Remove Lean line/block comments while preserving line structure."""
+    """Remove Lean comments and string contents while preserving line structure."""
     result: list[str] = []
     index = 0
     block_depth = 0
@@ -406,9 +446,10 @@ def strip_lean_comments(text: str) -> str:
 
         character = text[index]
         if in_string:
-            result.append(character)
+            result.append("\n" if character == "\n" else " ")
             if character == "\\" and index + 1 < len(text):
-                result.append(text[index + 1])
+                escaped = text[index + 1]
+                result.append("\n" if escaped == "\n" else " ")
                 index += 2
                 continue
             if character == '"':
@@ -430,9 +471,11 @@ def strip_lean_comments(text: str) -> str:
             index += 2
             continue
 
-        result.append(character)
         if character == '"':
+            result.append(" ")
             in_string = True
+        else:
+            result.append(character)
         index += 1
 
     return "".join(result)
@@ -507,15 +550,64 @@ def locate_unittest_regression(
         if not isinstance(node, ast.ClassDef):
             continue
         for member in node.body:
-            if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if member.name == anchor:
-                    matches.append(node.name)
+            if isinstance(member, ast.AsyncFunctionDef) and member.name == anchor:
+                fail(
+                    f"{claim_id} regression anchor {anchor!r} may not be async; "
+                    "Phase D requires a synchronously executed unittest method"
+                )
+            if isinstance(member, ast.FunctionDef) and member.name == anchor:
+                matches.append(node.name)
     if len(matches) != 1:
         fail(
             f"{claim_id} regression anchor {anchor!r} must identify exactly "
             f"one unittest method in {path_text}"
         )
     return matches[0]
+
+
+def validate_computational_implementation_target(
+    claim_id: str,
+    path_text: str,
+    anchor: str,
+    text: str,
+) -> None:
+    """Bind implementation provenance to executable project Python source."""
+    if not path_text.startswith("cosmo_core/") or not path_text.endswith(".py"):
+        fail(
+            f"{claim_id} implementation provenance must point to "
+            "cosmo_core/*.py executable source"
+        )
+    match = PYTHON_DEF_ANCHOR.fullmatch(anchor)
+    if match is None:
+        fail(
+            f"{claim_id} implementation anchor must have form 'def <name>'"
+        )
+    try:
+        tree = ast.parse(text, filename=path_text)
+    except SyntaxError as exc:
+        fail(f"{claim_id} implementation source {path_text} is invalid Python: {exc}")
+
+    function_name = match.group(1)
+    matches = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == function_name
+    ]
+    async_matches = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == function_name
+    ]
+    if async_matches:
+        fail(
+            f"{claim_id} implementation anchor {anchor!r} resolves to async "
+            "code; Phase D implementation evidence must be synchronous"
+        )
+    if len(matches) != 1:
+        fail(
+            f"{claim_id} implementation anchor {anchor!r} must identify "
+            f"exactly one top-level function in {path_text}"
+        )
 
 
 def validate_computational_regression_target(
@@ -623,6 +715,13 @@ def validate_provenance(
         else:
             if anchor not in text:
                 fail(f"{claim_id} anchor {anchor!r} not found in {path_text}")
+            if evidence_class == "COMPUTATIONAL" and role == "implementation":
+                validate_computational_implementation_target(
+                    claim_id,
+                    path_text,
+                    anchor,
+                    text,
+                )
             if evidence_class == "COMPUTATIONAL" and role == "regression":
                 validate_computational_regression_target(
                     claim_id,
@@ -745,6 +844,7 @@ def render_index(ledger: dict[str, Any]) -> str:
         url = require_inline_string(source.get("url"), f"{source_id} url")
         parsed = validate_source_url(source_id, url)
         identifiers = validate_identifiers(source_id, source.get("identifiers"))
+        validate_multi_accession_identity(source_id, identifiers)
         identifier_urls = validate_identifier_urls(
             source_id,
             identifiers,
