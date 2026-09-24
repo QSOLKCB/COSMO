@@ -736,6 +736,30 @@ def validate_public_claim_text(
             )
 
 
+def validate_scientific_sources(
+    claim_id: str,
+    claim_domain: str,
+    source_ids: list[str],
+    source_kinds: dict[str, str],
+    source_domains: dict[str, str],
+) -> None:
+    """Require scholarly sources from the same controlled scientific domain."""
+    if not source_ids:
+        fail(f"{claim_id} SCIENTIFIC claim requires an external source")
+    for source_id in source_ids:
+        if source_kinds[source_id] not in ALLOWED_SOURCE_KINDS:
+            fail(
+                f"{claim_id} SCIENTIFIC claim uses non-scholarly "
+                f"source {source_id}"
+            )
+        if source_domains[source_id] != claim_domain:
+            fail(
+                f"{claim_id} SCIENTIFIC domain {claim_domain!r} "
+                f"does not match source {source_id} domain "
+                f"{source_domains[source_id]!r}"
+            )
+
+
 def validate_public_documents(claim_ids: set[str]) -> None:
     """Apply the public cross-domain claim-ID guard to governed documents."""
     for path_text in PUBLIC_GOVERNED_PATHS:
@@ -854,21 +878,14 @@ def validate() -> None:
         falsification = claim.get("falsification")
         domain = claim.get("domain")
         if evidence_class == "SCIENTIFIC":
-            if not validated_sources:
-                fail(f"{claim_id} SCIENTIFIC claim requires an external source")
             claim_domain = validate_source_domain(claim_id, domain)
-            for source_id in validated_sources:
-                if source_kinds[source_id] not in ALLOWED_SOURCE_KINDS:
-                    fail(
-                        f"{claim_id} SCIENTIFIC claim uses non-scholarly "
-                        f"source {source_id}"
-                    )
-                if source_domains[source_id] != claim_domain:
-                    fail(
-                        f"{claim_id} SCIENTIFIC domain {claim_domain!r} "
-                        f"does not match source {source_id} domain "
-                        f"{source_domains[source_id]!r}"
-                    )
+            validate_scientific_sources(
+                claim_id,
+                claim_domain,
+                validated_sources,
+                source_kinds,
+                source_domains,
+            )
         elif domain is not None:
             fail(f"{claim_id} non-SCIENTIFIC claim may not set domain")
 
