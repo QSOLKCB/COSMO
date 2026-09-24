@@ -66,9 +66,80 @@ PINNED_REVIEWED_SCIENTIFIC_STATEMENTS: dict[str, str] = {
         "direct evidence of active E6/E7 transcription."
     ),
 }
-PINNED_REVIEWED_CLAIM_IDS = tuple(
-    f"COSMO-D-{number:03d}" for number in range(1, 15)
-)
+PINNED_REVIEWED_CLAIM_DEFINITIONS: dict[str, tuple[str, str]] = {
+    "COSMO-D-001": (
+        "FORMAL",
+        "For every CosmoLayer, six applications of the authoritative Lean "
+        "transition return the layer to itself.",
+    ),
+    "COSMO-D-002": (
+        "FORMAL",
+        "Every authoritative COSMO layer reaches every other layer within one "
+        "complete six-state orbit.",
+    ),
+    "COSMO-D-003": (
+        "COMPUTATIONAL",
+        "The Phase B3 Python reference generator deterministically constructs "
+        "240 unique E8 roots with rank 8 and squared norm 2, and the canonical "
+        "table is bound to a reviewed SHA-256.",
+    ),
+    "COSMO-D-004": (
+        "SCIENTIFIC",
+        PINNED_REVIEWED_SCIENTIFIC_STATEMENTS["COSMO-D-004"],
+    ),
+    "COSMO-D-005": (
+        "SCIENTIFIC",
+        PINNED_REVIEWED_SCIENTIFIC_STATEMENTS["COSMO-D-005"],
+    ),
+    "COSMO-D-006": (
+        "SCIENTIFIC",
+        PINNED_REVIEWED_SCIENTIFIC_STATEMENTS["COSMO-D-006"],
+    ),
+    "COSMO-D-007": (
+        "SCIENTIFIC",
+        PINNED_REVIEWED_SCIENTIFIC_STATEMENTS["COSMO-D-007"],
+    ),
+    "COSMO-D-008": (
+        "SCIENTIFIC",
+        PINNED_REVIEWED_SCIENTIFIC_STATEMENTS["COSMO-D-008"],
+    ),
+    "COSMO-D-009": (
+        "SYMBOLIC",
+        "The byte-to-cuneiform labels in COSMO are project-defined symbolic "
+        "annotations.",
+    ),
+    "COSMO-D-010": (
+        "SYMBOLIC",
+        "COSMO's language of undivided cosmic symmetry, life-code substrate, "
+        "infected reality, and Ouroboros self-causation is symbolic/interpretive "
+        "vocabulary.",
+    ),
+    "COSMO-D-011": (
+        "SYMBOLIC",
+        "The association of Spin(8) triality with HPV capsid branching or "
+        "trimerization is a symbolic cross-domain association in the current "
+        "repository.",
+    ),
+    "COSMO-D-012": (
+        "HYPOTHESIS",
+        "A future quantitatively specified mapping from triality-derived "
+        "features to an HPV/capsid observable could be tested for predictive "
+        "value against matched controls.",
+    ),
+    "COSMO-D-013": (
+        "SYMBOLIC",
+        "The use of SiS2Substrate as a COSMO state name is symbolic project "
+        "vocabulary rather than evidence that silicon disulfide is a biological "
+        "life-code substrate.",
+    ),
+    "COSMO-D-014": (
+        "COMPUTATIONAL",
+        "Within the documented SECDED capability, the Phase B5 software storage "
+        "pipeline deterministically recovers the original TriadicLattice through "
+        "bytes, ECC, ACGT, corruption, correction, bytes, and cube reconstruction.",
+    ),
+}
+PINNED_REVIEWED_CLAIM_IDS = tuple(PINNED_REVIEWED_CLAIM_DEFINITIONS)
 PINNED_REVIEWED_SOURCE_RECORDS: dict[str, tuple[str, str, str, str]] = {
     "SRC-E8-MATHWORLD": (
         "scholarly_reference",
@@ -108,6 +179,10 @@ PINNED_REVIEWED_SOURCE_RECORDS: dict[str, tuple[str, str, str, str]] = {
     ),
 }
 PINNED_REVIEWED_SOURCE_IDENTIFIERS: dict[str, dict[str, str]] = {
+    "SRC-E8-MATHWORLD": {},
+    "SRC-SPIN8-PTEP-2021": {
+        "year": "2021",
+    },
     "SRC-SIS2-PMID-25590815": {
         "PMID": "25590815",
         "DOI": "10.1021/ic501825r",
@@ -270,7 +345,9 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"triggers?|triggered|promotes?|promoted|mediates?|mediated|"
     r"enables?|enabled|"
     r"leads?\s+to|results?\s+in|gives?\s+rise\s+to|"
-    r"contributes?\s+to|mechanism|corresponds?\s+to|maps?\s+to|"
+    r"contributes?\s+to|corresponds?\s+to|maps?\s+to|"
+    r"is\s+(?:an?\s+|the\s+)?mechanism\s+(?:for|of|behind)|"
+    r"mechanism\s+(?:connects?|links?|drives?|causes?)|"
     r"is\s+responsible\s+for)\b",
     re.IGNORECASE,
 )
@@ -535,23 +612,11 @@ def validate_reviewed_source_identity(
     source_id: str,
     identifiers: dict[str, str],
 ) -> None:
-    """Bind reviewed URL-addressable identifiers to the intended source."""
-    article_identifiers = {
-        key: value
-        for key, value in identifiers.items()
-        if key in URL_BOUND_IDENTIFIERS
-    }
+    """Bind every reviewed identifier, including non-URL metadata, to its source."""
     expected = PINNED_REVIEWED_SOURCE_IDENTIFIERS.get(source_id)
-
     if expected is None:
-        if len(article_identifiers) > 1:
-            fail(
-                f"{source_id} multi-accession record lacks a reviewed "
-                "crosswalk in the validator"
-            )
-        return
-
-    if article_identifiers != expected:
+        fail(f"{source_id} lacks a reviewed identifier binding")
+    if identifiers != expected:
         fail(
             f"{source_id} identifiers do not match the reviewed source "
             f"identity: expected {expected!r}"
@@ -875,25 +940,27 @@ def _package_reexports_function(
     return False
 
 
-def _regression_imports_implementation(
+def _regression_import_binding(
     regression_tree: ast.Module,
     module_name: str,
     function_name: str,
-) -> bool:
+) -> str | None:
+    """Return the actual local name bound to the reviewed implementation import."""
     for node in regression_tree.body:
-        if not isinstance(node, ast.ImportFrom):
+        if not isinstance(node, ast.ImportFrom) or node.level != 0:
             continue
-        if node.level != 0:
+        module_matches = node.module == module_name
+        if node.module == "cosmo_core":
+            module_matches = _package_reexports_function(
+                module_name,
+                function_name,
+            )
+        if not module_matches:
             continue
-        if node.module == module_name and any(
-            alias.name == function_name for alias in node.names
-        ):
-            return True
-        if node.module == "cosmo_core" and any(
-            alias.name == function_name for alias in node.names
-        ):
-            return _package_reexports_function(module_name, function_name)
-    return False
+        for alias in node.names:
+            if alias.name == function_name:
+                return alias.asname or alias.name
+    return None
 
 
 class _CallFinder(ast.NodeVisitor):
@@ -905,12 +972,6 @@ class _CallFinder(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         if isinstance(node.func, ast.Name) and node.func.id == self.function_name:
-            self.found = True
-            return
-        if (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr == self.function_name
-        ):
             self.found = True
             return
         self.generic_visit(node)
@@ -981,6 +1042,39 @@ def _static_boolean_value(
     if isinstance(expression, ast.UnaryOp) and isinstance(expression.op, ast.Not):
         operand = _static_boolean_value(expression.operand, module_constants)
         return None if operand is None else not operand
+    if isinstance(expression, ast.BoolOp):
+        values = [
+            _static_boolean_value(value, module_constants)
+            for value in expression.values
+        ]
+        if isinstance(expression.op, ast.And):
+            if any(value is False for value in values):
+                return False
+            if all(value is True for value in values):
+                return True
+        elif isinstance(expression.op, ast.Or):
+            if any(value is True for value in values):
+                return True
+            if all(value is False for value in values):
+                return False
+        return None
+    if (
+        isinstance(expression, ast.Compare)
+        and len(expression.ops) == 1
+        and len(expression.comparators) == 1
+    ):
+        left = _static_boolean_value(expression.left, module_constants)
+        right = _static_boolean_value(
+            expression.comparators[0],
+            module_constants,
+        )
+        if left is None or right is None:
+            return None
+        operator = expression.ops[0]
+        if isinstance(operator, (ast.Is, ast.Eq)):
+            return left == right
+        if isinstance(operator, (ast.IsNot, ast.NotEq)):
+            return left != right
     return None
 
 
@@ -1067,11 +1161,12 @@ def validate_computational_evidence_connection(
         regression_anchor,
         regression_text,
     )
-    if not _regression_imports_implementation(
+    imported_binding = _regression_import_binding(
         regression_tree,
         module_name,
         function_name,
-    ):
+    )
+    if imported_binding is None:
         fail(
             f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
             f"does not import {function_name} from declared implementation "
@@ -1080,12 +1175,12 @@ def validate_computational_evidence_connection(
     module_constants = _module_boolean_constants(regression_tree)
     if not _regression_calls_function(
         method,
-        function_name,
+        imported_binding,
         module_constants,
     ):
         fail(
             f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
-            f"does not call declared implementation function {function_name}"
+            f"does not call imported implementation binding {imported_binding}"
         )
 
 
@@ -1660,6 +1755,12 @@ def public_assertion_is_negated(
     ):
         prefix_start = boundary.end()
     predicate_prefix = text[prefix_start:assertion.start()]
+    predicate_prefix = re.sub(
+        r"\bnot\s+only\b",
+        "only",
+        predicate_prefix,
+        flags=re.IGNORECASE,
+    )
     if PUBLIC_NEGATION_RE.search(predicate_prefix) is not None:
         return True
 
@@ -1672,7 +1773,7 @@ def public_assertion_is_negated(
     if suffix_boundary is not None:
         suffix = suffix[:suffix_boundary.start()]
     return re.match(
-        r"^\s*(?:no|not|never|without)\b",
+        r"^\s*(?:no|never|without|not(?!\s+only\b))\b",
         suffix,
         re.IGNORECASE,
     ) is not None
@@ -1701,6 +1802,27 @@ def strip_markdown_link_destinations(text: str) -> str:
         lambda match: match.group(2),
         text,
     )
+
+
+def normalize_markdown_visible_text(text: str) -> str:
+    """Approximate rendered Markdown text for semantic matching."""
+    text = re.sub(
+        r"\\([\\`*_{}\[\]()#+\-.!|>~])",
+        r"\1",
+        text,
+    )
+    return re.sub(r"(?:\*\*|__|~~|\*|_)", "", text)
+
+
+def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
+    """Keep Markdown list items separate when binding claim IDs to assertions."""
+    if path_text.endswith(".md"):
+        text = re.sub(
+            r"(?m)^(?= {0,3}(?:[-+*]|[0-9]+[.)])\s+)",
+            "\n\n",
+            text,
+        )
+    return re.split(r"\n\s*\n", text)
 
 
 def strip_markdown_fenced_blocks(text: str) -> str:
@@ -1787,7 +1909,9 @@ def validate_public_claim_text(
     rendered_text = html.unescape(
         strip_public_nonrendered_comments(path_text, text)
     )
-    paragraphs = re.split(r"\n\s*\n", rendered_text)
+    if path_text.endswith(".md"):
+        rendered_text = normalize_markdown_visible_text(rendered_text)
+    paragraphs = split_public_rendered_blocks(path_text, rendered_text)
     for paragraph_number, paragraph in enumerate(paragraphs, start=1):
         compact = " ".join(paragraph.split())
         if not compact:
@@ -1863,6 +1987,21 @@ def validate_reviewed_scientific_statement(
         fail(
             f"{claim_id} SCIENTIFIC statement differs from its reviewed "
             "source-bound proposition"
+        )
+
+
+def validate_reviewed_claim_definition(
+    claim_id: str,
+    evidence_class: str,
+    statement: str,
+) -> None:
+    """Prevent a reviewed ID from being silently repurposed."""
+    expected = PINNED_REVIEWED_CLAIM_DEFINITIONS.get(claim_id)
+    if expected is None:
+        return
+    if (evidence_class, statement) != expected:
+        fail(
+            f"{claim_id} class/statement differs from its reviewed definition"
         )
 
 
@@ -2027,6 +2166,11 @@ def validate() -> None:
         statement = require_inline_string(
             claim.get("statement"),
             f"{claim_id} statement",
+        )
+        validate_reviewed_claim_definition(
+            claim_id,
+            evidence_class,
+            statement,
         )
         require_inline_string(
             claim.get("boundary"),
