@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import html
 import ipaddress
+from html.parser import HTMLParser
 import json
 import re
 import runpy
@@ -485,7 +486,7 @@ PLACEHOLDER_FILLER_TOKENS = frozenset(
         "value",
     }
 )
-PUBLIC_GOVERNED_SUFFIXES = frozenset({".md", ".tex"})
+PUBLIC_GOVERNED_SUFFIXES = frozenset({".md", ".markdown", ".tex"})
 PUBLIC_DISCOVERY_EXCLUDED_PARTS = frozenset(
     {
         ".git",
@@ -559,9 +560,11 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"validates?|validated|predicts?|predicted|induces?|induced|"
     r"triggers?|triggered|promotes?|promoted|mediates?|mediated|"
     r"enables?|enabled|"
-    r"controls?\s+(?=(?:the\s+)?(?:HPV16|HPV|capsid|E6|E7|p16|"
-    r"SiS2|SiS_2|silicon\s+disulfide|Spin\(8\)|triality|E8|E_8|Weyl|"
-    r"cuneiform|Sumerian|cosmic|cosmology|Ouroboros)\b)|"
+    r"controls?\s+(?=(?:(?:the|an?|this|that)\s+)?"
+    r"(?:(?:[A-Za-z][A-Za-z0-9_-]*|of)\s+){0,5}"
+    r"(?:HPV16|HPV|capsid|E6|E7|p16|SiS2|SiS_2|silicon\s+disulfide|"
+    r"Spin\(8\)|triality|E8|E_8|Weyl|cuneiform|Sumerian|cosmic|"
+    r"cosmology|Ouroboros)\b)|"
     r"controlled|regulates?|regulated|modulates?|modulated|"
     r"governs?|governed|influences?|influenced|"
     r"leads?\s+to|results?\s+in|gives?\s+rise\s+to|"
@@ -573,7 +576,7 @@ PUBLIC_ASSERTION_RE = re.compile(
 )
 PUBLIC_NEGATION_RE = re.compile(
     r"\b(?:not|no|never|cannot|can't|does\s+not|do\s+not|"
-    r"is\s+not|are\s+not|without)\b",
+    r"is\s+not|are\s+not|without|fails?\s+to)\b",
     re.IGNORECASE,
 )
 
@@ -1260,8 +1263,17 @@ def _static_boolean_value(
     expression: ast.expr,
     module_constants: dict[str, bool],
 ) -> bool | None:
-    if isinstance(expression, ast.Constant) and isinstance(expression.value, bool):
-        return expression.value
+    if isinstance(expression, ast.Constant):
+        value = expression.value
+        if value is None or isinstance(
+            value,
+            (bool, int, float, complex, str, bytes),
+        ):
+            return bool(value)
+    if isinstance(expression, (ast.List, ast.Tuple, ast.Set)):
+        return bool(expression.elts)
+    if isinstance(expression, ast.Dict):
+        return bool(expression.keys)
     if isinstance(expression, ast.Name):
         return module_constants.get(expression.id)
     if isinstance(expression, ast.UnaryOp) and isinstance(expression.op, ast.Not):
@@ -1341,7 +1353,7 @@ def _reachable_statements_call_function(
     module_constants: dict[str, bool],
 ) -> bool:
     for statement in statements:
-        if isinstance(statement, (ast.Return, ast.Raise)):
+        if isinstance(statement, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
             return False
 
         if isinstance(statement, ast.If):
@@ -1428,6 +1440,106 @@ def _reachable_statements_call_function(
     return False
 
 
+class _BindingMutationFinder(ast.NodeVisitor):
+    """Detect rebinding or patching of an imported evidence binding."""
+
+    def __init__(self, binding: str) -> None:
+        self.binding = binding
+        self.found = False
+
+    def _target_mentions_binding(self, target: ast.expr) -> bool:
+        if isinstance(target, ast.Name):
+            return target.id == self.binding
+        if isinstance(target, (ast.Tuple, ast.List)):
+            return any(
+                self._target_mentions_binding(element)
+                for element in target.elts
+            )
+        if isinstance(target, ast.Subscript):
+            if (
+                isinstance(target.value, ast.Call)
+                and isinstance(target.value.func, ast.Name)
+                and target.value.func.id == "globals"
+                and isinstance(target.slice, ast.Constant)
+                and target.slice.value == self.binding
+            ):
+                return True
+        return False
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if any(self._target_mentions_binding(target) for target in node.targets):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if self._target_mentions_binding(node.target):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        if self._target_mentions_binding(node.target):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        if self._target_mentions_binding(node.target):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_With(self, node: ast.With) -> None:
+        for item in node.items:
+            context = item.context_expr
+            if not isinstance(context, ast.Call):
+                continue
+            func = context.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "dict"
+                and len(context.args) >= 2
+                and isinstance(context.args[0], ast.Call)
+                and isinstance(context.args[0].func, ast.Name)
+                and context.args[0].func.id == "globals"
+                and isinstance(context.args[1], ast.Dict)
+            ):
+                for key in context.args[1].keys:
+                    if isinstance(key, ast.Constant) and key.value == self.binding:
+                        self.found = True
+                        return
+            if (
+                isinstance(func, ast.Name)
+                and func.id == "patch"
+                and context.args
+                and isinstance(context.args[0], ast.Constant)
+                and isinstance(context.args[0].value, str)
+                and context.args[0].value.rsplit(".", 1)[-1] == self.binding
+            ):
+                self.found = True
+                return
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+
+def _method_mutates_binding(method: ast.FunctionDef, binding: str) -> bool:
+    finder = _BindingMutationFinder(binding)
+    for statement in method.body:
+        finder.visit(statement)
+        if finder.found:
+            return True
+    return False
+
+
 def _regression_calls_function(
     method: ast.FunctionDef,
     function_name: str,
@@ -1479,6 +1591,11 @@ def validate_computational_evidence_connection(
             f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
             f"does not import {function_name} from declared implementation "
             f"{implementation_path}"
+        )
+    if _method_mutates_binding(method, imported_binding):
+        fail(
+            f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
+            f"rebinds or patches imported implementation binding {imported_binding}"
         )
     module_constants = _module_boolean_constants(regression_tree)
     if not _regression_calls_function(
@@ -1642,8 +1759,17 @@ def validate_provenance(
                 text,
             )
         else:
-            if anchor not in text:
-                fail(f"{claim_id} anchor {anchor!r} not found in {path_text}")
+            anchor_text = text
+            suffix = Path(path_text).suffix.lower()
+            if suffix in {".md", ".markdown", ".tex"}:
+                anchor_text = strip_public_nonrendered_comments(path_text, text)
+            elif suffix == ".lean":
+                anchor_text = strip_lean_comments(text)
+            if anchor not in anchor_text:
+                fail(
+                    f"{claim_id} anchor {anchor!r} not found in rendered/"
+                    f"comment-free content of {path_text}"
+                )
             if evidence_class == "COMPUTATIONAL" and role == "implementation":
                 validate_computational_implementation_target(
                     claim_id,
@@ -2007,14 +2133,14 @@ def public_assertion_clause(
     """Return the proposition containing one assertion predicate."""
     left_boundary = 0
     for boundary in re.finditer(
-        r"(?:[.!?;,|&]|\b(?:but|however|yet|although|though|while|whereas)\b)",
+        r"(?:[.!?;,|&]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
         text[:assertion.start()],
         re.IGNORECASE,
     ):
         left_boundary = boundary.end()
 
     right_match = re.search(
-        r"(?:[.!?;,|&]|\b(?:but|however|yet|although|though|while|whereas)\b)",
+        r"(?:[.!?;,|&]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
         text[assertion.end():],
         re.IGNORECASE,
     )
@@ -2033,14 +2159,14 @@ def public_assertion_binding_scope(
     """Return the punctuation-bounded proposition used to bind a claim ID."""
     left_boundary = 0
     for boundary in re.finditer(
-        r"(?:[.!?;,|]|\b(?:but|however|yet|although|though|while|whereas)\b)",
+        r"(?:[.!?;,|]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
         text[:assertion.start()],
         re.IGNORECASE,
     ):
         left_boundary = boundary.end()
 
     right_match = re.search(
-        r"(?:[.!?;,|]|\b(?:but|however|yet)\b)",
+        r"(?:[.!?;,|]|\b(?:and|but|however|yet)\b)",
         text[assertion.end():],
         re.IGNORECASE,
     )
@@ -2094,18 +2220,37 @@ def _blank_non_newlines(value: str) -> str:
 
 
 def strip_markdown_indented_code_blocks(text: str) -> str:
-    """Blank four-space/tab-indented Markdown code lines."""
+    """Blank root indented code while preserving rendered list continuations."""
     lines: list[str] = []
+    in_list_item = False
+    list_marker = re.compile(r"^ {0,3}(?:[-+*]|[0-9]+[.)])\s+")
     for line in text.splitlines(keepends=True):
-        if line.startswith("    ") or line.startswith("\t"):
-            lines.append(_blank_non_newlines(line))
-        else:
+        if list_marker.match(line):
+            in_list_item = True
             lines.append(line)
+            continue
+        if not line.strip():
+            in_list_item = False
+            lines.append(line)
+            continue
+        if line.startswith("    ") or line.startswith("\t"):
+            if in_list_item:
+                lines.append(line)
+            else:
+                lines.append(_blank_non_newlines(line))
+            continue
+        in_list_item = False
+        lines.append(line)
     return "".join(lines)
 
 
 def strip_markdown_link_destinations(text: str) -> str:
-    """Preserve visible labels while removing inline Markdown destinations."""
+    """Preserve visible labels while removing non-rendered link destinations."""
+    text = re.sub(
+        r"(?m)^ {0,3}\[[^\]\n]+\]:\s*\S+.*$",
+        lambda match: _blank_non_newlines(match.group(0)),
+        text,
+    )
     return re.sub(
         r"(!?)\[([^\]]*)\]\((?:\\.|[^()])*\)",
         lambda match: match.group(2),
@@ -2113,13 +2258,36 @@ def strip_markdown_link_destinations(text: str) -> str:
     )
 
 
+class _VisibleHTMLTextParser(HTMLParser):
+    """Collect rendered inline-HTML text while discarding tags/attributes."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        self.parts.append(html.unescape(f"&{name};"))
+
+    def handle_charref(self, name: str) -> None:
+        self.parts.append(html.unescape(f"&#{name};"))
+
+
+def strip_inline_html_tags(text: str) -> str:
+    parser = _VisibleHTMLTextParser()
+    try:
+        parser.feed(text)
+        parser.close()
+    except Exception:
+        return text
+    return "".join(parser.parts)
+
+
 def normalize_markdown_visible_text(text: str) -> str:
     """Approximate rendered Markdown text for semantic matching."""
-    text = re.sub(
-        r"</?[A-Za-z][A-Za-z0-9-]*(?:\s+[^<>]*?)?\s*/?>",
-        "",
-        text,
-    )
+    text = strip_inline_html_tags(text)
     text = re.sub(
         r"\\([\\`*_{}\[\]()#+\-.!|>~])",
         r"\1",
@@ -2129,11 +2297,16 @@ def normalize_markdown_visible_text(text: str) -> str:
 
 
 def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
-    """Keep Markdown list items separate when binding claim IDs to assertions."""
-    if path_text.endswith(".md"):
+    """Keep rendered Markdown block boundaries when binding claim IDs."""
+    if Path(path_text).suffix.lower() in {".md", ".markdown"}:
         text = re.sub(
             r"(?m)^(?= {0,3}(?:[-+*]|[0-9]+[.)])\s+)",
             "\n\n",
+            text,
+        )
+        text = re.sub(
+            r"(?m)^( {0,3}#{1,6}[ \t]+[^\n]*)(\n|$)",
+            r"\1\2\n",
             text,
         )
     return re.split(r"\n\s*\n", text)
@@ -2176,7 +2349,7 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
         lambda match: _blank_non_newlines(match.group(0)),
         text,
     )
-    if path_text.endswith(".md"):
+    if Path(path_text).suffix.lower() in {".md", ".markdown"}:
         text = strip_markdown_fenced_blocks(text)
         text = strip_markdown_indented_code_blocks(text)
         text = strip_markdown_link_destinations(text)
@@ -2223,7 +2396,7 @@ def validate_public_claim_text(
     rendered_text = html.unescape(
         strip_public_nonrendered_comments(path_text, text)
     )
-    if path_text.endswith(".md"):
+    if Path(path_text).suffix.lower() in {".md", ".markdown"}:
         rendered_text = normalize_markdown_visible_text(rendered_text)
     paragraphs = split_public_rendered_blocks(path_text, rendered_text)
     for paragraph_number, paragraph in enumerate(paragraphs, start=1):
