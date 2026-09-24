@@ -431,6 +431,16 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             claim_ids,
         )
 
+        validate_public_claim_text(
+            "README.md",
+            (
+                "Spin(8) is mathematical context. "
+                "HPV16 capsid assembly is biological context. "
+                "PR A proves a local integer result."
+            ),
+            claim_ids,
+        )
+
     def test_hpv16_reference_accession_is_versioned(self) -> None:
         ledger = self.load_ledger()
         source = next(
