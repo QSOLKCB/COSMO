@@ -558,7 +558,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"demonstrates?|demonstrated|establishes?|established|"
     r"validates?|validated|predicts?|predicted|induces?|induced|"
     r"triggers?|triggered|promotes?|promoted|mediates?|mediated|"
-    r"enables?|enabled|controls?|controlled|regulates?|regulated|"
+    r"enables?|enabled|controls?(?!\s*:)|controlled|regulates?|regulated|"
     r"modulates?|modulated|governs?|governed|influences?|influenced|"
     r"leads?\s+to|results?\s+in|gives?\s+rise\s+to|"
     r"contributes?\s+to|corresponds?\s+to|maps?\s+to|"
