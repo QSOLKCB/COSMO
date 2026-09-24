@@ -317,6 +317,28 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 },
             )
 
+    def test_multi_accession_crosswalk_rejects_unrelated_article_ids(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_crosswalk = cast(
+            Callable[[str, dict[str, str]], None],
+            namespace["validate_multi_accession_identity"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_crosswalk(
+                "SRC-HPV16-E6E7-PMID-17645777",
+                {
+                    "PMID": "17645778",
+                    "PMCID": "PMC11158331",
+                },
+            )
+        validate_crosswalk(
+            "SRC-HPV16-E6E7-PMID-17645777",
+            {
+                "PMID": "17645777",
+                "PMCID": "PMC11158331",
+            },
+        )
+
     def test_formal_provenance_requires_actual_lean_theorem(self) -> None:
         namespace = self.load_validator_namespace()
         validate_provenance = cast(
@@ -369,6 +391,29 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                         source,
                     )
 
+    def test_formal_anchor_ignores_lean_string_literals(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_formal_target = cast(
+            Callable[[str, str, str, str], None],
+            namespace["validate_formal_provenance_target"],
+        )
+        anchor = (
+            "theorem six_step_periodic (layer : CosmoLayer) : "
+            "psiIterate 6 layer = layer := by"
+        )
+        source = (
+            'def fakeLedgerEvidence : String := "'
+            + anchor
+            + '"\n'
+        )
+        with self.assertRaises(SystemExit):
+            validate_formal_target(
+                "COSMO-D-001",
+                "cosmovirus.lean",
+                anchor,
+                source,
+            )
+
     def test_formal_target_must_enter_protected_lean_compile_closure(self) -> None:
         namespace = self.load_validator_namespace()
         validate_formal_target = cast(
@@ -412,6 +457,44 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                     source,
                 )
 
+    def test_async_regression_methods_are_rejected(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_regression = cast(
+            Callable[[str, str, str, Path, str], None],
+            namespace["validate_computational_regression_target"],
+        )
+        source = (
+            "import unittest\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    async def test_required_regression(self):\n"
+            "        self.fail('must execute')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "test_regression.py"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                validate_regression(
+                    "COSMO-D-999",
+                    "tests/test_regression.py",
+                    "test_required_regression",
+                    path,
+                    source,
+                )
+
+    def test_implementation_provenance_requires_executable_project_source(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_implementation = cast(
+            Callable[[str, str, str, str], None],
+            namespace["validate_computational_implementation_target"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_implementation(
+                "COSMO-D-003",
+                "README.md",
+                "def validate_e8_root_system",
+                "Phase B3\n",
+            )
+
     def test_scientific_claim_rejects_unrelated_domain_source(self) -> None:
         namespace = self.load_validator_namespace()
         validate_scientific_sources = cast(
@@ -447,6 +530,13 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             validate_public_claim_text(
                 "README.md",
                 unsupported,
+                claim_classes,
+            )
+
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                "Spin(8) triality leads to HPV16 capsid assembly.",
                 claim_classes,
             )
 
