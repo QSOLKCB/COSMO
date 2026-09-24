@@ -282,6 +282,94 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             validate_source_kind("SRC-TEST", "project_note")
 
+    def test_multi_accession_sources_bind_each_identifier(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_identifier_urls = cast(
+            Callable[[str, dict[str, str], object], dict[str, str]],
+            namespace["validate_identifier_urls"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_identifier_urls(
+                "SRC-TEST",
+                {
+                    "PMID": "17645778",
+                    "PMCID": "PMC11158331",
+                },
+                {
+                    "PMID": "https://pubmed.ncbi.nlm.nih.gov/17645777/",
+                    "PMCID": (
+                        "https://pmc.ncbi.nlm.nih.gov/articles/"
+                        "PMC11158331/"
+                    ),
+                },
+            )
+
+    def test_formal_provenance_requires_actual_lean_theorem(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_provenance = cast(
+            Callable[[str, str, object], set[str]],
+            namespace["validate_provenance"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_provenance(
+                "COSMO-D-999",
+                "FORMAL",
+                [
+                    {
+                        "path": "README.md",
+                        "anchor": "Phase D claim ledger",
+                        "role": "kernel_checked_theorem",
+                    }
+                ],
+            )
+
+    def test_scientific_claim_rejects_unrelated_domain_source(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_scientific_sources = cast(
+            Callable[
+                [str, str, list[str], dict[str, str], dict[str, str]],
+                None,
+            ],
+            namespace["validate_scientific_sources"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_scientific_sources(
+                "COSMO-D-007",
+                "biomedicine",
+                ["SRC-E8-MATHWORLD"],
+                {"SRC-E8-MATHWORLD": "scholarly_reference"},
+                {"SRC-E8-MATHWORLD": "mathematics"},
+            )
+
+    def test_public_cross_domain_assertion_requires_claim_id(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, set[str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_ids = {
+            claim["id"] for claim in self.load_ledger()["claims"]
+        }
+        unsupported = (
+            "Spin(8) triality biologically causes HPV16 capsid assembly."
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                unsupported,
+                claim_ids,
+            )
+
+        governed = (
+            "COSMO-D-011 records that Spin(8) triality causes HPV16 "
+            "capsid assembly only as a claim subject to its ledger class."
+        )
+        validate_public_claim_text(
+            "README.md",
+            governed,
+            claim_ids,
+        )
+
     def test_hpv16_reference_accession_is_versioned(self) -> None:
         ledger = self.load_ledger()
         source = next(
