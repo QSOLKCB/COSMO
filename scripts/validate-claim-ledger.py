@@ -16,7 +16,9 @@ INDEX_PATH = ROOT / "CLAIM-LEDGER.md"
 
 CLASSES = ("FORMAL", "COMPUTATIONAL", "SCIENTIFIC", "HYPOTHESIS", "SYMBOLIC")
 CLAIM_ID = re.compile(r"COSMO-D-[0-9]{3}$")
+CLAIM_ID_SEARCH = re.compile(r"\bCOSMO-D-[0-9]{3}\b")
 SOURCE_ID = re.compile(r"SRC-[A-Z0-9][A-Z0-9._-]*$")
+LEAN_THEOREM_ANCHOR = re.compile(r"theorem ([A-Za-z_][A-Za-z0-9_']*)$")
 IDENTIFIER_PATTERNS: dict[str, re.Pattern[str]] = {
     "PMID": re.compile(r"[1-9][0-9]{0,7}$"),
     "PMCID": re.compile(r"PMC[1-9][0-9]*$"),
@@ -24,6 +26,7 @@ IDENTIFIER_PATTERNS: dict[str, re.Pattern[str]] = {
     "RefSeq": re.compile(r"[A-Z]{2}_[0-9]+\.[0-9]+$"),
     "year": re.compile(r"(?:19|20)[0-9]{2}$"),
 }
+URL_BOUND_IDENTIFIERS = frozenset({"PMID", "PMCID", "DOI", "RefSeq"})
 ALLOWED_STATUSES: dict[str, frozenset[str]] = {
     "FORMAL": frozenset({"SUPPORTED"}),
     "COMPUTATIONAL": frozenset({"SUPPORTED"}),
@@ -38,6 +41,13 @@ ALLOWED_SOURCE_KINDS = frozenset(
         "peer_reviewed_article",
         "peer_reviewed_review",
         "official_database",
+    }
+)
+ALLOWED_SOURCE_DOMAINS = frozenset(
+    {
+        "mathematics",
+        "materials_science",
+        "biomedicine",
     }
 )
 ALLOWED_PROVENANCE_ROLES: dict[str, frozenset[str]] = {
@@ -66,6 +76,47 @@ PLACEHOLDER_TEXT = frozenset(
         "placeholder",
         "later",
     }
+)
+PUBLIC_GOVERNED_PATHS = (
+    "README.md",
+    "KNOWN_LIMITATIONS.md",
+    "cosmovirus.tex",
+    "cosmovirus_cattheory.tex",
+)
+PUBLIC_DOMAIN_PATTERNS: dict[str, re.Pattern[str]] = {
+    "mathematics": re.compile(
+        r"\b(?:Spin\(8\)|triality|E8|E_8|Weyl)\b",
+        re.IGNORECASE,
+    ),
+    "biomedicine": re.compile(
+        r"\b(?:HPV16|HPV|capsid|E6|E7|p16)\b",
+        re.IGNORECASE,
+    ),
+    "materials_science": re.compile(
+        r"\b(?:SiS2|SiS_2|silicon disulfide)\b",
+        re.IGNORECASE,
+    ),
+    "archaeology": re.compile(
+        r"\b(?:Sumerian|cuneiform|archaeolog(?:y|ical))\b",
+        re.IGNORECASE,
+    ),
+    "cosmology": re.compile(
+        r"\b(?:cosmic|cosmology|Ouroboros)\b",
+        re.IGNORECASE,
+    ),
+}
+PUBLIC_ASSERTION_RE = re.compile(
+    r"\b(?:causes?|caused|drives?|driven|produces?|produced|"
+    r"determines?|determined|explains?|explained|proves?|proved|"
+    r"demonstrates?|demonstrated|establishes?|established|"
+    r"validates?|validated|predicts?|predicted|induces?|induced|"
+    r"mechanism|corresponds?\s+to|maps?\s+to|is\s+responsible\s+for)\b",
+    re.IGNORECASE,
+)
+PUBLIC_NEGATION_RE = re.compile(
+    r"\b(?:not|no|never|cannot|can't|does\s+not|do\s+not|"
+    r"is\s+not|are\s+not|without)\b",
+    re.IGNORECASE,
 )
 
 
@@ -187,6 +238,14 @@ def validate_source_kind(source_id: str, kind: object) -> str:
     return exact_kind
 
 
+def validate_source_domain(source_id: str, domain: object) -> str:
+    """Require one controlled scientific domain for each external source."""
+    exact_domain = require_inline_string(domain, f"{source_id} domain")
+    if exact_domain not in ALLOWED_SOURCE_DOMAINS:
+        fail(f"{source_id} has unsupported source domain {exact_domain!r}")
+    return exact_domain
+
+
 def validate_source_url(source_id: str, value: object) -> SplitResult:
     """Require an absolute navigable HTTPS source URL without credentials."""
     url = require_inline_string(value, f"{source_id} url")
@@ -204,44 +263,70 @@ def validate_source_url(source_id: str, value: object) -> SplitResult:
     return parsed
 
 
-def crosscheck_identifiers_with_url(
+def canonical_identifier_url(identifier_type: str, value: str) -> str:
+    """Return the canonical URL representation for a URL-bound identifier."""
+    if identifier_type == "PMID":
+        return f"https://pubmed.ncbi.nlm.nih.gov/{value}/"
+    if identifier_type == "PMCID":
+        return f"https://pmc.ncbi.nlm.nih.gov/articles/{value}/"
+    if identifier_type == "RefSeq":
+        return f"https://www.ncbi.nlm.nih.gov/nuccore/{value}"
+    if identifier_type == "DOI":
+        return f"https://doi.org/{value}"
+    raise AssertionError(f"identifier type {identifier_type!r} is not URL-bound")
+
+
+def validate_identifier_urls(
+    source_id: str,
+    identifiers: dict[str, str],
+    value: object,
+) -> dict[str, str]:
+    """Independently bind every accession/article identifier to its canonical URL."""
+    expected_keys = set(identifiers) & URL_BOUND_IDENTIFIERS
+    if not expected_keys:
+        if value not in (None, {}):
+            fail(f"{source_id} may not define identifier_urls without URL-bound IDs")
+        return {}
+
+    if not isinstance(value, dict):
+        fail(f"{source_id} identifier_urls must be an object")
+    if set(value) != expected_keys:
+        fail(
+            f"{source_id} identifier_urls keys must exactly match "
+            f"{sorted(expected_keys)}"
+        )
+
+    validated: dict[str, str] = {}
+    for identifier_type in sorted(expected_keys):
+        identifier_value = identifiers[identifier_type]
+        url = require_inline_string(
+            value.get(identifier_type),
+            f"{source_id} identifier URL {identifier_type}",
+        )
+        parsed = validate_source_url(source_id, url)
+        expected = canonical_identifier_url(identifier_type, identifier_value)
+        if parsed.geturl() != expected:
+            fail(
+                f"{source_id} {identifier_type} {identifier_value} is not "
+                f"bound to canonical URL {expected!r}"
+            )
+        validated[identifier_type] = url
+    return validated
+
+
+def validate_primary_source_url(
     source_id: str,
     parsed: SplitResult,
-    identifiers: dict[str, str],
+    identifier_urls: dict[str, str],
 ) -> None:
-    """Bind canonical NCBI accessions to the resource named by the source URL."""
-    hostname = (parsed.hostname or "").lower()
-    path = parsed.path.rstrip("/")
-
-    refseq = identifiers.get("RefSeq")
-    if refseq is not None:
-        if hostname != "www.ncbi.nlm.nih.gov" or path != f"/nuccore/{refseq}":
-            fail(
-                f"{source_id} RefSeq {refseq} does not match canonical "
-                "NCBI nuccore URL"
-            )
-
-    pmcid = identifiers.get("PMCID")
-    if pmcid is not None:
-        if (
-            hostname != "pmc.ncbi.nlm.nih.gov"
-            or path != f"/articles/{pmcid}"
-        ):
-            fail(
-                f"{source_id} PMCID {pmcid} does not match canonical PMC URL"
-            )
-    else:
-        pmid = identifiers.get("PMID")
-        if pmid is not None:
-            if hostname != "pubmed.ncbi.nlm.nih.gov" or path != f"/{pmid}":
-                fail(
-                    f"{source_id} PMID {pmid} does not match canonical "
-                    "PubMed URL"
-                )
-
-    year = identifiers.get("year")
-    if year is not None and f"/{year}/" not in f"{parsed.path}/":
-        fail(f"{source_id} year {year} does not match the source URL path")
+    """Require the source's primary URL to be one of its bound identifier URLs."""
+    if not identifier_urls:
+        return
+    primary = parsed.geturl()
+    if primary not in set(identifier_urls.values()):
+        fail(
+            f"{source_id} primary URL must match one canonical identifier URL"
+        )
 
 
 def validate_repository_path(path_text: str, claim_id: str) -> Path:
@@ -266,6 +351,31 @@ def validate_repository_path(path_text: str, claim_id: str) -> Path:
     if not resolved.is_file():
         fail(f"{claim_id} provenance path {path_text!r} is not a file")
     return resolved
+
+
+def validate_formal_provenance_target(
+    claim_id: str,
+    path_text: str,
+    anchor: str,
+    text: str,
+) -> None:
+    """Bind kernel_checked_theorem role to an actual Lean theorem declaration."""
+    if not path_text.endswith(".lean"):
+        fail(f"{claim_id} FORMAL provenance must point to a .lean source file")
+    match = LEAN_THEOREM_ANCHOR.fullmatch(anchor)
+    if match is None:
+        fail(
+            f"{claim_id} FORMAL anchor must have form 'theorem <name>'"
+        )
+    theorem_name = re.escape(match.group(1))
+    declaration = re.compile(
+        rf"(?m)^\s*theorem\s+{theorem_name}\b"
+    )
+    if declaration.search(text) is None:
+        fail(
+            f"{claim_id} FORMAL anchor does not identify a Lean theorem "
+            f"declaration in {path_text}"
+        )
 
 
 def validate_provenance(
@@ -308,6 +418,13 @@ def validate_provenance(
             fail(f"{claim_id} provenance path {path_text!r} unreadable: {exc}")
         if anchor not in text:
             fail(f"{claim_id} anchor {anchor!r} not found in {path_text}")
+        if evidence_class == "FORMAL":
+            validate_formal_provenance_target(
+                claim_id,
+                path_text,
+                anchor,
+                text,
+            )
 
     if evidence_class == "FORMAL" and "kernel_checked_theorem" not in roles:
         fail(f"{claim_id} FORMAL claim requires kernel-checked theorem evidence")
@@ -376,6 +493,15 @@ def _source_identifier_text(identifiers: dict[str, str]) -> str:
     )
 
 
+def _identifier_url_text(identifier_urls: dict[str, str]) -> str:
+    if not identifier_urls:
+        return "none"
+    return "; ".join(
+        f"{markdown_text(key)}={markdown_text(identifier_urls[key])}"
+        for key in sorted(identifier_urls)
+    )
+
+
 def _claim_sources_text(sources: list[str]) -> str:
     return ", ".join(markdown_text(source) for source in sources) if sources else "none"
 
@@ -408,19 +534,27 @@ def render_index(ledger: dict[str, Any]) -> str:
             fail("source entries must be objects")
         source_id = require_inline_string(source.get("id"), "source id")
         kind = validate_source_kind(source_id, source.get("kind"))
+        domain = validate_source_domain(source_id, source.get("domain"))
         title = require_inline_string(source.get("title"), f"{source_id} title")
         url = require_inline_string(source.get("url"), f"{source_id} url")
         parsed = validate_source_url(source_id, url)
         identifiers = validate_identifiers(source_id, source.get("identifiers"))
-        crosscheck_identifiers_with_url(source_id, parsed, identifiers)
+        identifier_urls = validate_identifier_urls(
+            source_id,
+            identifiers,
+            source.get("identifier_urls"),
+        )
+        validate_primary_source_url(source_id, parsed, identifier_urls)
 
         lines.extend(
             [
                 f"### {markdown_text(source_id)}",
                 "",
                 f"- **Kind:** `{markdown_code(kind)}`",
+                f"- **Domain:** `{markdown_code(domain)}`",
                 f"- **Title:** {markdown_text(title)}",
                 f"- **Identifiers:** {_source_identifier_text(identifiers)}",
+                f"- **Identifier URLs:** {_identifier_url_text(identifier_urls)}",
                 f"- **URL:** {markdown_text(url)}",
                 "",
             ]
@@ -448,6 +582,20 @@ def render_index(ledger: dict[str, Any]) -> str:
             f"{claim_id} boundary",
         )
 
+        lines.extend(
+            [
+                f"### {markdown_text(claim_id)} — {markdown_text(evidence_class)}",
+                "",
+                f"- **Status:** `{markdown_code(status)}`",
+                f"- **Statement:** {markdown_text(statement)}",
+            ]
+        )
+
+        domain = claim.get("domain")
+        if domain is not None:
+            exact_domain = require_inline_string(domain, f"{claim_id} domain")
+            lines.append(f"- **Domain:** `{markdown_code(exact_domain)}`")
+
         sources_obj = claim.get("sources")
         if not isinstance(sources_obj, list) or any(
             not isinstance(source_id, str) for source_id in sources_obj
@@ -460,13 +608,8 @@ def render_index(ledger: dict[str, Any]) -> str:
             )
             for source_id in cast(list[str], sources_obj)
         ]
-
         lines.extend(
             [
-                f"### {markdown_text(claim_id)} — {markdown_text(evidence_class)}",
-                "",
-                f"- **Status:** `{markdown_code(status)}`",
-                f"- **Statement:** {markdown_text(statement)}",
                 f"- **Sources:** {_claim_sources_text(claim_sources)}",
                 f"- **Boundary:** {markdown_text(boundary)}",
             ]
@@ -533,18 +676,75 @@ def render_index(ledger: dict[str, Any]) -> str:
             "",
             "1. New cross-domain public-facing claims require a stable "
             "`COSMO-D-###` ID.",
-            "2. **SCIENTIFIC** claims require external source records.",
+            "2. **SCIENTIFIC** claims require external source records from "
+            "the same controlled scientific domain.",
             "3. **HYPOTHESIS** claims must remain `PROPOSED` and include "
             "structured falsification criteria.",
             "4. **SYMBOLIC** claims require `empirical_status = NON_EMPIRICAL`.",
             "5. **FORMAL** and **COMPUTATIONAL** claims require reviewed, "
             "class-appropriate repository provenance.",
-            "6. A source about one domain does not validate a cross-domain bridge.",
-            "7. This Markdown file must exactly match the canonical JSON rendering.",
+            "6. Multi-accession source records must independently bind every "
+            "URL-addressable identifier.",
+            "7. Positive public cross-domain causal/mechanistic assertions "
+            "must carry a ledger claim ID.",
+            "8. This Markdown file must exactly match the canonical JSON rendering.",
             "",
         ]
     )
     return "\n".join(lines)
+
+
+def paragraph_domains(text: str) -> set[str]:
+    """Return controlled semantic domains named in one public paragraph."""
+    return {
+        domain
+        for domain, pattern in PUBLIC_DOMAIN_PATTERNS.items()
+        if pattern.search(text) is not None
+    }
+
+
+def validate_public_claim_text(
+    path_text: str,
+    text: str,
+    claim_ids: set[str],
+) -> None:
+    """Reject unledgered positive cross-domain causal/mechanistic assertions."""
+    paragraphs = re.split(r"\n\s*\n", text)
+    for paragraph_number, paragraph in enumerate(paragraphs, start=1):
+        compact = " ".join(paragraph.split())
+        if not compact:
+            continue
+        domains = paragraph_domains(compact)
+        if len(domains) < 2:
+            continue
+        if PUBLIC_ASSERTION_RE.search(compact) is None:
+            continue
+        if PUBLIC_NEGATION_RE.search(compact) is not None:
+            continue
+        present_ids = set(CLAIM_ID_SEARCH.findall(compact))
+        if not present_ids:
+            fail(
+                f"{path_text} paragraph {paragraph_number} contains an "
+                "unledgered positive cross-domain assertion involving "
+                f"{sorted(domains)}"
+            )
+        unknown = present_ids - claim_ids
+        if unknown:
+            fail(
+                f"{path_text} paragraph {paragraph_number} references "
+                f"unknown claim IDs {sorted(unknown)}"
+            )
+
+
+def validate_public_documents(claim_ids: set[str]) -> None:
+    """Apply the public cross-domain claim-ID guard to governed documents."""
+    for path_text in PUBLIC_GOVERNED_PATHS:
+        path = ROOT / path_text
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            fail(f"cannot read governed public document {path_text}: {exc}")
+        validate_public_claim_text(path_text, text, claim_ids)
 
 
 def validate() -> None:
@@ -561,6 +761,7 @@ def validate() -> None:
 
     source_ids: set[str] = set()
     source_kinds: dict[str, str] = {}
+    source_domains: dict[str, str] = {}
     for source in sources:
         if not isinstance(source, dict):
             fail("source entries must be objects")
@@ -573,10 +774,17 @@ def validate() -> None:
 
         kind = validate_source_kind(source_id, source.get("kind"))
         source_kinds[source_id] = kind
+        domain = validate_source_domain(source_id, source.get("domain"))
+        source_domains[source_id] = domain
         require_inline_string(source.get("title"), f"{source_id} title")
         parsed = validate_source_url(source_id, source.get("url"))
         identifiers = validate_identifiers(source_id, source.get("identifiers"))
-        crosscheck_identifiers_with_url(source_id, parsed, identifiers)
+        identifier_urls = validate_identifier_urls(
+            source_id,
+            identifiers,
+            source.get("identifier_urls"),
+        )
+        validate_primary_source_url(source_id, parsed, identifier_urls)
 
     claim_ids: set[str] = set()
     previous_number = 0
@@ -644,15 +852,26 @@ def validate() -> None:
             fail(f"{claim_id} references unknown sources: {sorted(unknown)}")
 
         falsification = claim.get("falsification")
+        domain = claim.get("domain")
         if evidence_class == "SCIENTIFIC":
             if not validated_sources:
                 fail(f"{claim_id} SCIENTIFIC claim requires an external source")
+            claim_domain = validate_source_domain(claim_id, domain)
             for source_id in validated_sources:
                 if source_kinds[source_id] not in ALLOWED_SOURCE_KINDS:
                     fail(
                         f"{claim_id} SCIENTIFIC claim uses non-scholarly "
                         f"source {source_id}"
                     )
+                if source_domains[source_id] != claim_domain:
+                    fail(
+                        f"{claim_id} SCIENTIFIC domain {claim_domain!r} "
+                        f"does not match source {source_id} domain "
+                        f"{source_domains[source_id]!r}"
+                    )
+        elif domain is not None:
+            fail(f"{claim_id} non-SCIENTIFIC claim may not set domain")
+
         if evidence_class == "HYPOTHESIS":
             validate_falsification(claim_id, falsification)
         elif falsification is not None:
@@ -669,6 +888,8 @@ def validate() -> None:
             fail(
                 f"{claim_id} non-SYMBOLIC claim may not set empirical_status"
             )
+
+    validate_public_documents(claim_ids)
 
     try:
         index_text = INDEX_PATH.read_text(encoding="utf-8")
