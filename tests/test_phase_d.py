@@ -191,7 +191,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
 
         rendered = render_index(ledger)
         self.assertNotIn("<!--", rendered)
-        self.assertIn("&lt;!--", rendered)
+        self.assertIn("&lt;&#33;--", rendered)
 
     def test_source_url_requires_https_authority(self) -> None:
         namespace = self.load_validator_namespace()
