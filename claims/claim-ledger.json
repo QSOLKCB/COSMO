@@ -239,7 +239,7 @@
       "provenance": [
         {
           "path": "cosmovirus.tex",
-          "anchor": "Symbolic Interpretation",
+          "anchor": "COSMO-D-010",
           "role": "symbolic_section"
         }
       ],
@@ -278,7 +278,14 @@
         }
       ],
       "sources": [],
-      "falsification": "Pre-register the mapping, observable, dataset split, metric, and matched baselines; reject the hypothesis if held-out performance fails the predeclared threshold or is not distinguishable from the controls.",
+      "falsification": {
+        "protocol": "Pre-register the triality-derived mapping, target observable, dataset split, evaluation metric, matched baselines, and decision threshold before evaluating held-out data.",
+        "rejection_condition": "Reject the hypothesis if held-out performance fails the predeclared threshold or is not distinguishable from the matched control baselines.",
+        "controls": [
+          "Matched baseline models fixed before held-out evaluation",
+          "Held-out data excluded from mapping and threshold selection"
+        ]
+      },
       "boundary": "No such predictive result is currently claimed."
     },
     {
