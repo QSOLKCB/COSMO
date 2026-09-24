@@ -1203,6 +1203,7 @@ def validate() -> None:
         require_inline_string(source.get("title"), f"{source_id} title")
         parsed = validate_source_url(source_id, source.get("url"))
         identifiers = validate_identifiers(source_id, source.get("identifiers"))
+        validate_multi_accession_identity(source_id, identifiers)
         identifier_urls = validate_identifier_urls(
             source_id,
             identifiers,
