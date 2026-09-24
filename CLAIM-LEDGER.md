@@ -150,7 +150,7 @@
 - **Boundary:** These phrases are not empirical cosmology, materials science, virology, or causal-mechanism claims.
 - **Empirical status:** `NON_EMPIRICAL`
 - **Repository provenance:**
-  - `cosmovirus.tex` — `Symbolic Interpretation` (`symbolic_section`)
+  - `cosmovirus.tex` — `COSMO-D-010` (`symbolic_section`)
 
 ### COSMO-D-011 — SYMBOLIC
 
@@ -168,7 +168,9 @@
 - **Statement:** A future quantitatively specified mapping from triality-derived features to an HPV/capsid observable could be tested for predictive value against matched controls.
 - **Sources:** none
 - **Boundary:** No such predictive result is currently claimed.
-- **Falsification:** Pre-register the mapping, observable, dataset split, metric, and matched baselines; reject the hypothesis if held-out performance fails the predeclared threshold or is not distinguishable from the controls.
+- **Falsification protocol:** Pre-register the triality-derived mapping, target observable, dataset split, evaluation metric, matched baselines, and decision threshold before evaluating held-out data.
+- **Rejection condition:** Reject the hypothesis if held-out performance fails the predeclared threshold or is not distinguishable from the matched control baselines.
+- **Controls:** Matched baseline models fixed before held-out evaluation; Held-out data excluded from mapping and threshold selection
 - **Repository provenance:**
   - `CLAIM-LEDGER.md` — `COSMO-D-012` (`hypothesis_definition`)
 
@@ -196,8 +198,8 @@
 
 1. New cross-domain public-facing claims require a stable `COSMO-D-###` ID.
 2. **SCIENTIFIC** claims require external source records.
-3. **HYPOTHESIS** claims must remain `PROPOSED` and include explicit falsification criteria.
+3. **HYPOTHESIS** claims must remain `PROPOSED` and include structured falsification criteria.
 4. **SYMBOLIC** claims require `empirical_status = NON_EMPIRICAL`.
-5. **FORMAL** and **COMPUTATIONAL** claims require reviewed repository provenance.
+5. **FORMAL** and **COMPUTATIONAL** claims require reviewed, class-appropriate repository provenance.
 6. A source about one domain does not validate a cross-domain bridge.
 7. This Markdown file must exactly match the canonical JSON rendering.
