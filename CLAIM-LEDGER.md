@@ -17,43 +17,55 @@
 ### SRC-E8-MATHWORLD
 
 - **Kind:** `scholarly_reference`
+- **Domain:** `mathematics`
 - **Title:** Gosset Polytope — E8 root polytope
 - **Identifiers:** none
+- **Identifier URLs:** none
 - **URL:** https://mathworld.wolfram.com/GossetPolytope.html
 
 ### SRC-SPIN8-PTEP-2021
 
 - **Kind:** `scholarly_article`
+- **Domain:** `mathematics`
 - **Title:** Vertex operator superalgebra/sigma model correspondences: The four-torus case
 - **Identifiers:** year=2021
+- **Identifier URLs:** none
 - **URL:** https://academic.oup.com/ptep/article/2021/8/08B102/6353037
 
 ### SRC-SIS2-PMID-25590815
 
 - **Kind:** `peer_reviewed_article`
+- **Domain:** `materials_science`
 - **Title:** Two high-pressure phases of SiS2 as missing links between the extremes of only edge-sharing and only corner-sharing tetrahedra
 - **Identifiers:** DOI=10.1021/ic501825r, PMID=25590815
+- **Identifier URLs:** DOI=https://doi.org/10.1021/ic501825r; PMID=https://pubmed.ncbi.nlm.nih.gov/25590815/
 - **URL:** https://pubmed.ncbi.nlm.nih.gov/25590815/
 
 ### SRC-HPV16-REFSEQ
 
 - **Kind:** `official_database`
+- **Domain:** `biomedicine`
 - **Title:** Human papillomavirus type 16, complete genome
 - **Identifiers:** RefSeq=NC_001526.4
+- **Identifier URLs:** RefSeq=https://www.ncbi.nlm.nih.gov/nuccore/NC_001526.4
 - **URL:** https://www.ncbi.nlm.nih.gov/nuccore/NC_001526.4
 
 ### SRC-HPV16-E6E7-PMID-17645777
 
 - **Kind:** `peer_reviewed_review`
+- **Domain:** `biomedicine`
 - **Title:** Basic mechanisms of high-risk human papillomavirus-induced carcinogenesis: Roles of E6 and E7 proteins
 - **Identifiers:** PMCID=PMC11158331, PMID=17645777
+- **Identifier URLs:** PMCID=https://pmc.ncbi.nlm.nih.gov/articles/PMC11158331/; PMID=https://pubmed.ncbi.nlm.nih.gov/17645777/
 - **URL:** https://pmc.ncbi.nlm.nih.gov/articles/PMC11158331/
 
 ### SRC-HPV-P16-PMC8409095
 
 - **Kind:** `peer_reviewed_review`
+- **Domain:** `biomedicine`
 - **Title:** Biology of HPV Mediated Carcinogenesis and Tumor Progression
 - **Identifiers:** PMCID=PMC8409095
+- **Identifier URLs:** PMCID=https://pmc.ncbi.nlm.nih.gov/articles/PMC8409095/
 - **URL:** https://pmc.ncbi.nlm.nih.gov/articles/PMC8409095/
 
 ## Claims
@@ -90,6 +102,7 @@
 
 - **Status:** `SUPPORTED`
 - **Statement:** Spin(8) has triality symmetry with an S3 outer automorphism action that permutes its vector and two spinor eight-dimensional representations.
+- **Domain:** `mathematics`
 - **Sources:** SRC-SPIN8-PTEP-2021
 - **Boundary:** This mathematical fact does not establish a mechanism connecting Spin(8) triality to HPV, capsids, SiS2, or cosmology.
 - **Repository provenance:**
@@ -99,6 +112,7 @@
 
 - **Status:** `SUPPORTED`
 - **Statement:** The ambient-pressure phase of SiS2 is orthorhombic and contains chains of distorted edge-sharing SiS4 tetrahedra.
+- **Domain:** `materials_science`
 - **Sources:** SRC-SIS2-PMID-25590815
 - **Boundary:** This crystallographic fact does not support COSMO's symbolic substrate or life-code interpretation.
 - **Repository provenance:**
@@ -108,6 +122,7 @@
 
 - **Status:** `SUPPORTED`
 - **Statement:** The NCBI reference sequence used for human papillomavirus type 16 in this ledger is RefSeq NC_001526.4.
+- **Domain:** `biomedicine`
 - **Sources:** SRC-HPV16-REFSEQ
 - **Boundary:** The accession identifies a reference genome; it does not validate COSMO's state-machine use of the HPV16Layer label.
 - **Repository provenance:**
@@ -117,6 +132,7 @@
 
 - **Status:** `SUPPORTED`
 - **Statement:** High-risk HPV E6 and E7 proteins are established carcinogenesis factors; E6 promotes p53 degradation and E7 disrupts pRb/E2F control.
+- **Domain:** `biomedicine`
 - **Sources:** SRC-HPV16-E6E7-PMID-17645777
 - **Boundary:** This biomedical mechanism is external scientific context and is not a mechanism for COSMO transitions.
 - **Repository provenance:**
@@ -126,6 +142,7 @@
 
 - **Status:** `SUPPORTED_WITH_SCOPE`
 - **Statement:** p16 immunohistochemistry is used as a surrogate marker for HPV-associated disease in some clinical contexts, but p16 positivity is not identical to direct evidence of active E6/E7 transcription.
+- **Domain:** `biomedicine`
 - **Sources:** SRC-HPV-P16-PMC8409095
 - **Boundary:** COSMO must not equate a generic p16-positive label with HPV16 infection or active viral transcription.
 - **Repository provenance:**
@@ -197,9 +214,10 @@
 ## Governance
 
 1. New cross-domain public-facing claims require a stable `COSMO-D-###` ID.
-2. **SCIENTIFIC** claims require external source records.
+2. **SCIENTIFIC** claims require external source records from the same controlled scientific domain.
 3. **HYPOTHESIS** claims must remain `PROPOSED` and include structured falsification criteria.
 4. **SYMBOLIC** claims require `empirical_status = NON_EMPIRICAL`.
 5. **FORMAL** and **COMPUTATIONAL** claims require reviewed, class-appropriate repository provenance.
-6. A source about one domain does not validate a cross-domain bridge.
-7. This Markdown file must exactly match the canonical JSON rendering.
+6. Multi-accession source records must independently bind every URL-addressable identifier.
+7. Positive public cross-domain causal/mechanistic assertions must carry a ledger claim ID.
+8. This Markdown file must exactly match the canonical JSON rendering.
