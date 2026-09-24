@@ -534,7 +534,7 @@ def render_index(ledger: dict[str, Any]) -> str:
             fail("source entries must be objects")
         source_id = require_inline_string(source.get("id"), "source id")
         kind = validate_source_kind(source_id, source.get("kind"))
-        domain = validate_source_domain(source_id, source.get("domain"))
+        source_domain = validate_source_domain(source_id, source.get("domain"))
         title = require_inline_string(source.get("title"), f"{source_id} title")
         url = require_inline_string(source.get("url"), f"{source_id} url")
         parsed = validate_source_url(source_id, url)
@@ -551,7 +551,7 @@ def render_index(ledger: dict[str, Any]) -> str:
                 f"### {markdown_text(source_id)}",
                 "",
                 f"- **Kind:** `{markdown_code(kind)}`",
-                f"- **Domain:** `{markdown_code(domain)}`",
+                f"- **Domain:** `{markdown_code(source_domain)}`",
                 f"- **Title:** {markdown_text(title)}",
                 f"- **Identifiers:** {_source_identifier_text(identifiers)}",
                 f"- **Identifier URLs:** {_identifier_url_text(identifier_urls)}",
@@ -591,9 +591,12 @@ def render_index(ledger: dict[str, Any]) -> str:
             ]
         )
 
-        domain = claim.get("domain")
-        if domain is not None:
-            exact_domain = require_inline_string(domain, f"{claim_id} domain")
+        raw_claim_domain = claim.get("domain")
+        if raw_claim_domain is not None:
+            exact_domain = require_inline_string(
+                raw_claim_domain,
+                f"{claim_id} domain",
+            )
             lines.append(f"- **Domain:** `{markdown_code(exact_domain)}`")
 
         sources_obj = claim.get("sources")
@@ -805,8 +808,8 @@ def validate() -> None:
 
         kind = validate_source_kind(source_id, source.get("kind"))
         source_kinds[source_id] = kind
-        domain = validate_source_domain(source_id, source.get("domain"))
-        source_domains[source_id] = domain
+        source_domain = validate_source_domain(source_id, source.get("domain"))
+        source_domains[source_id] = source_domain
         require_inline_string(source.get("title"), f"{source_id} title")
         parsed = validate_source_url(source_id, source.get("url"))
         identifiers = validate_identifiers(source_id, source.get("identifiers"))
@@ -883,9 +886,12 @@ def validate() -> None:
             fail(f"{claim_id} references unknown sources: {sorted(unknown)}")
 
         falsification = claim.get("falsification")
-        domain = claim.get("domain")
+        raw_claim_domain = claim.get("domain")
         if evidence_class == "SCIENTIFIC":
-            claim_domain = validate_source_domain(claim_id, domain)
+            claim_domain = validate_source_domain(
+                claim_id,
+                raw_claim_domain,
+            )
             validate_scientific_sources(
                 claim_id,
                 claim_domain,
@@ -893,7 +899,7 @@ def validate() -> None:
                 source_kinds,
                 source_domains,
             )
-        elif domain is not None:
+        elif raw_claim_domain is not None:
             fail(f"{claim_id} non-SCIENTIFIC claim may not set domain")
 
         if evidence_class == "HYPOTHESIS":
