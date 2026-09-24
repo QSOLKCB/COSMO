@@ -320,6 +320,36 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 ],
             )
 
+    def test_formal_anchor_ignores_commented_lean_declarations(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_formal_target = cast(
+            Callable[[str, str, str, str], None],
+            namespace["validate_formal_provenance_target"],
+        )
+        commented_sources = (
+            (
+                "/-\n"
+                "theorem six_step_periodic : True := by trivial\n"
+                "-/\n"
+            ),
+            "-- theorem six_step_periodic : True := by trivial\n",
+            (
+                "/- outer comment\n"
+                "/- nested comment -/\n"
+                "theorem six_step_periodic : True := by trivial\n"
+                "-/\n"
+            ),
+        )
+        for source in commented_sources:
+            with self.subTest(source=source):
+                with self.assertRaises(SystemExit):
+                    validate_formal_target(
+                        "COSMO-D-999",
+                        "CosmoFormal.lean",
+                        "theorem six_step_periodic",
+                        source,
+                    )
+
     def test_scientific_claim_rejects_unrelated_domain_source(self) -> None:
         namespace = self.load_validator_namespace()
         validate_scientific_sources = cast(
@@ -364,6 +394,40 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         validate_public_claim_text(
             "README.md",
             governed,
+            claim_ids,
+        )
+
+    def test_public_negation_only_suppresses_its_own_assertion(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, set[str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_ids = {
+            claim["id"] for claim in self.load_ledger()["claims"]
+        }
+
+        for unsupported in (
+            (
+                "Spin(8) does not describe normal virology. "
+                "Spin(8) triality causes HPV16 capsid assembly."
+            ),
+            (
+                "Spin(8) does not describe normal virology, but "
+                "Spin(8) triality causes HPV16 capsid assembly."
+            ),
+        ):
+            with self.subTest(text=unsupported):
+                with self.assertRaises(SystemExit):
+                    validate_public_claim_text(
+                        "README.md",
+                        unsupported,
+                        claim_ids,
+                    )
+
+        validate_public_claim_text(
+            "README.md",
+            "Spin(8) triality does not cause HPV16 capsid assembly.",
             claim_ids,
         )
 
