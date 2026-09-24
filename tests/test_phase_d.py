@@ -470,6 +470,27 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 source,
             )
 
+    def test_formal_claim_is_bound_to_its_reviewed_theorem(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_formal_target = cast(
+            Callable[[str, str, str, str], None],
+            namespace["validate_formal_provenance_target"],
+        )
+        source = (REPOSITORY_ROOT / "cosmovirus.lean").read_text(
+            encoding="utf-8"
+        )
+        wrong_anchor = (
+            "theorem every_layer_reachable (source target : CosmoLayer) : "
+            "ReachesWithinCycle source target := by"
+        )
+        with self.assertRaises(SystemExit):
+            validate_formal_target(
+                "COSMO-D-001",
+                "cosmovirus.lean",
+                wrong_anchor,
+                source,
+            )
+
     def test_formal_target_must_enter_protected_lean_compile_closure(self) -> None:
         namespace = self.load_validator_namespace()
         validate_formal_target = cast(
@@ -666,6 +687,42 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 disabled_by_constant_comparison,
             )
 
+        disabled_by_while_false = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        while False:\n"
+            "            validate_e8_root_system()\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                disabled_by_while_false,
+            )
+
+        disabled_by_empty_for = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        for _ in ():\n"
+            "            validate_e8_root_system()\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                disabled_by_empty_for,
+            )
+
         aliased_import_with_shadow = (
             "import unittest\n"
             "from cosmo_core.e8 import validate_e8_root_system as imported_validate\n"
@@ -717,28 +774,36 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "HPV16 RefSeq NC_001526.4 is a vaccine that cures every cancer.",
             )
 
-    def test_reviewed_claim_definition_rejects_id_repurposing(self) -> None:
+    def test_reviewed_claim_record_rejects_any_field_drift(self) -> None:
         namespace = self.load_validator_namespace()
-        validate_definition = cast(
-            Callable[[str, str, str], None],
-            namespace["validate_reviewed_claim_definition"],
+        validate_record = cast(
+            Callable[[str, dict[str, Any]], None],
+            namespace["validate_reviewed_claim_record"],
         )
         ledger = self.load_ledger()
-        claim = next(
+        computational = next(
             claim for claim in ledger["claims"]
             if claim["id"] == "COSMO-D-003"
         )
-        validate_definition(
-            claim["id"],
-            claim["class"],
-            claim["statement"],
+        validate_record(computational["id"], computational)
+
+        repurposed = deepcopy(computational)
+        repurposed["class"] = "SYMBOLIC"
+        repurposed["statement"] = "Unrelated symbolic replacement."
+        with self.assertRaises(SystemExit):
+            validate_record("COSMO-D-003", repurposed)
+
+        symbolic = next(
+            claim for claim in ledger["claims"]
+            if claim["id"] == "COSMO-D-009"
+        )
+        expanded_boundary = deepcopy(symbolic)
+        expanded_boundary["boundary"] = (
+            "This symbolic annotation also covers SiS2, HPV16, "
+            "and capsid terminology."
         )
         with self.assertRaises(SystemExit):
-            validate_definition(
-                "COSMO-D-003",
-                "SYMBOLIC",
-                "Unrelated symbolic replacement.",
-            )
+            validate_record("COSMO-D-009", expanded_boundary)
 
     def test_reviewed_claim_inventory_rejects_deleted_claim(self) -> None:
         namespace = self.load_validator_namespace()
@@ -857,6 +922,19 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 claim_classes,
             )
 
+        for causal_verb in ("controls", "regulates", "modulates", "governs"):
+            with self.subTest(causal_verb=causal_verb):
+                with self.assertRaises(SystemExit):
+                    validate_public_claim_text(
+                        "README.md",
+                        (
+                            "Spin(8) triality "
+                            + causal_verb
+                            + " HPV16 capsid assembly."
+                        ),
+                        claim_classes,
+                    )
+
         for misbound in (
             (
                 "COSMO-D-004 documents Spin(8) triality. "
@@ -919,6 +997,26 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "sample.md",
                 r"Spin\(8\) causes H**PV16** cap**sid** assembly.",
                 {},
+            )
+
+    def test_public_claim_guard_strips_inline_html_tags(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    "Spin(8) tria<em></em>lity causes "
+                    "H<em></em>PV16 cap<em></em>sid assembly."
+                ),
+                claim_classes,
             )
 
     def test_public_list_items_do_not_share_claim_binding_scope(self) -> None:
