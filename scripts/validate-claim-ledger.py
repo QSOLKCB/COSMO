@@ -43,6 +43,44 @@ PINNED_SCIENTIFIC_CLAIM_SOURCES: dict[str, tuple[str, ...]] = {
     "COSMO-D-007": ("SRC-HPV16-E6E7-PMID-17645777",),
     "COSMO-D-008": ("SRC-HPV-P16-PMC8409095",),
 }
+PINNED_REVIEWED_SOURCE_RECORDS: dict[str, tuple[str, str, str, str]] = {
+    "SRC-E8-MATHWORLD": (
+        "scholarly_reference",
+        "Gosset Polytope — E8 root polytope",
+        "https://mathworld.wolfram.com/GossetPolytope.html",
+        "mathematics",
+    ),
+    "SRC-SPIN8-PTEP-2021": (
+        "scholarly_article",
+        "Vertex operator superalgebra/sigma model correspondences: The four-torus case",
+        "https://academic.oup.com/ptep/article/2021/8/08B102/6353037",
+        "mathematics",
+    ),
+    "SRC-SIS2-PMID-25590815": (
+        "peer_reviewed_article",
+        "Two high-pressure phases of SiS2 as missing links between the extremes of only edge-sharing and only corner-sharing tetrahedra",
+        "https://pubmed.ncbi.nlm.nih.gov/25590815/",
+        "materials_science",
+    ),
+    "SRC-HPV16-REFSEQ": (
+        "official_database",
+        "Human papillomavirus type 16, complete genome",
+        "https://www.ncbi.nlm.nih.gov/nuccore/NC_001526.4",
+        "biomedicine",
+    ),
+    "SRC-HPV16-E6E7-PMID-17645777": (
+        "peer_reviewed_review",
+        "Basic mechanisms of high-risk human papillomavirus-induced carcinogenesis: Roles of E6 and E7 proteins",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC11158331/",
+        "biomedicine",
+    ),
+    "SRC-HPV-P16-PMC8409095": (
+        "peer_reviewed_review",
+        "Biology of HPV Mediated Carcinogenesis and Tumor Progression",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC8409095/",
+        "biomedicine",
+    ),
+}
 PINNED_REVIEWED_SOURCE_IDENTIFIERS: dict[str, dict[str, str]] = {
     "SRC-SIS2-PMID-25590815": {
         "PMID": "25590815",
@@ -111,6 +149,30 @@ PLACEHOLDER_TEXT = frozenset(
     }
 )
 PUBLIC_GOVERNED_SUFFIXES = frozenset({".md", ".tex"})
+PUBLIC_DISCOVERY_EXCLUDED_PARTS = frozenset(
+    {
+        ".git",
+        ".lake",
+        ".venv",
+        "venv",
+        "env",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+        "build",
+        "dist",
+        "site-packages",
+    }
+)
+LATEX_PUBLIC_MACROS: dict[str, str] = {
+    r"\TRI": "triality",
+    r"\HPV": "HPV16",
+    r"\SiS": "SiS2",
+    r"\EEs": "E8",
+    r"\Ouro": "Ouroboros",
+}
 PUBLIC_DOMAIN_PATTERNS: dict[str, re.Pattern[str]] = {
     "mathematics": re.compile(
         r"(?:(?<!\w)Spin\(8\)(?!\w)|\b(?:triality|E8|E_8|Weyl)\b)",
@@ -383,6 +445,24 @@ def canonical_identifier_url(identifier_type: str, value: str) -> str:
     if identifier_type == "DOI":
         return f"https://doi.org/{value}"
     raise AssertionError(f"identifier type {identifier_type!r} is not URL-bound")
+
+
+def validate_reviewed_source_record(
+    source_id: str,
+    kind: str,
+    title: str,
+    url: str,
+    domain: str,
+) -> None:
+    """Bind each reviewed source ID to its exact reviewed record."""
+    expected = PINNED_REVIEWED_SOURCE_RECORDS.get(source_id)
+    if expected is None:
+        fail(f"{source_id} lacks a reviewed source-record binding")
+    actual = (kind, title, url, domain)
+    if actual != expected:
+        fail(
+            f"{source_id} source record does not match reviewed identity"
+        )
 
 
 def validate_reviewed_source_identity(
@@ -750,18 +830,83 @@ def _regression_imports_implementation(
     return False
 
 
+class _CallFinder(ast.NodeVisitor):
+    """Find one target call without descending into nested functions."""
+
+    def __init__(self, function_name: str) -> None:
+        self.function_name = function_name
+        self.found = False
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name) and node.func.id == self.function_name:
+            self.found = True
+            return
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == self.function_name
+        ):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+
+def _statement_calls_function(
+    statement: ast.stmt,
+    function_name: str,
+) -> bool:
+    finder = _CallFinder(function_name)
+    finder.visit(statement)
+    return finder.found
+
+
+def _reachable_statements_call_function(
+    statements: list[ast.stmt],
+    function_name: str,
+) -> bool:
+    for statement in statements:
+        if isinstance(statement, (ast.Return, ast.Raise)):
+            return False
+
+        if isinstance(statement, ast.If):
+            if isinstance(statement.test, ast.Constant):
+                branch = statement.body if bool(statement.test.value) else statement.orelse
+                if _reachable_statements_call_function(branch, function_name):
+                    return True
+            else:
+                if _reachable_statements_call_function(
+                    statement.body,
+                    function_name,
+                ):
+                    return True
+                if _reachable_statements_call_function(
+                    statement.orelse,
+                    function_name,
+                ):
+                    return True
+            continue
+
+        if _statement_calls_function(statement, function_name):
+            return True
+    return False
+
+
 def _regression_calls_function(
     method: ast.FunctionDef,
     function_name: str,
 ) -> bool:
-    for node in ast.walk(method):
-        if not isinstance(node, ast.Call):
-            continue
-        if isinstance(node.func, ast.Name) and node.func.id == function_name:
-            return True
-        if isinstance(node.func, ast.Attribute) and node.func.attr == function_name:
-            return True
-    return False
+    return _reachable_statements_call_function(
+        method.body,
+        function_name,
+    )
 
 
 def validate_computational_evidence_connection(
@@ -1314,17 +1459,17 @@ def public_assertion_clause(
     text: str,
     assertion: re.Match[str],
 ) -> str:
-    """Return the sentence/contrast clause containing one assertion."""
+    """Return the proposition containing one assertion predicate."""
     left_boundary = 0
     for boundary in re.finditer(
-        r"(?:[.!?;]|\b(?:but|however|yet)\b)",
+        r"(?:[.!?;,|&]|\b(?:but|however|yet|although|though|while|whereas)\b)",
         text[:assertion.start()],
         re.IGNORECASE,
     ):
         left_boundary = boundary.end()
 
     right_match = re.search(
-        r"(?:[.!?;]|\b(?:but|however|yet)\b)",
+        r"(?:[.!?;,|&]|\b(?:but|however|yet|although|though|while|whereas)\b)",
         text[assertion.end():],
         re.IGNORECASE,
     )
@@ -1397,6 +1542,26 @@ def _blank_non_newlines(value: str) -> str:
     return "".join("\n" if character == "\n" else " " for character in value)
 
 
+def strip_markdown_indented_code_blocks(text: str) -> str:
+    """Blank four-space/tab-indented Markdown code lines."""
+    lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if line.startswith("    ") or line.startswith("\t"):
+            lines.append(_blank_non_newlines(line))
+        else:
+            lines.append(line)
+    return "".join(lines)
+
+
+def strip_markdown_link_destinations(text: str) -> str:
+    """Preserve visible labels while removing inline Markdown destinations."""
+    return re.sub(
+        r"(!?)\[([^\]]*)\]\((?:\\.|[^()])*\)",
+        lambda match: match.group(2),
+        text,
+    )
+
+
 def strip_markdown_fenced_blocks(text: str) -> str:
     """Blank fenced code blocks without discarding adjacent rendered prose."""
     lines: list[str] = []
@@ -1436,8 +1601,17 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
     )
     if path_text.endswith(".md"):
         text = strip_markdown_fenced_blocks(text)
+        text = strip_markdown_indented_code_blocks(text)
+        text = strip_markdown_link_destinations(text)
     if not path_text.endswith(".tex"):
         return text
+
+    for macro, expansion in LATEX_PUBLIC_MACROS.items():
+        text = re.sub(
+            re.escape(macro) + r"(?![A-Za-z])",
+            expansion,
+            text,
+        )
 
     lines: list[str] = []
     for line in text.splitlines(keepends=True):
@@ -1475,11 +1649,13 @@ def validate_public_claim_text(
         compact = " ".join(paragraph.split())
         if not compact:
             continue
-        if (
-            "\\begin{tabular}" in paragraph
-            or "\\begin{longtable}" in paragraph
-        ):
-            continue
+        paragraph_ids = set(CLAIM_ID_SEARCH.findall(compact))
+        unknown_paragraph_ids = paragraph_ids - set(claim_classes)
+        if unknown_paragraph_ids:
+            fail(
+                f"{path_text} paragraph {paragraph_number} references "
+                f"unknown claim IDs {sorted(unknown_paragraph_ids)}"
+            )
         if len(paragraph_domains(compact)) < 2:
             continue
 
@@ -1574,9 +1750,10 @@ def discover_public_governed_paths(root: Path = ROOT) -> tuple[str, ...]:
             for path in root.rglob("*")
             if path.is_file()
             and path.suffix.lower() in PUBLIC_GOVERNED_SUFFIXES
-            and ".git" not in path.relative_to(root).parts
-            and ".lake" not in path.relative_to(root).parts
-            and "__pycache__" not in path.relative_to(root).parts
+            and not (
+                set(path.relative_to(root).parts)
+                & PUBLIC_DISCOVERY_EXCLUDED_PARTS
+            )
         )
     )
     if not paths:
