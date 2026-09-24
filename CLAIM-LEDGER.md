@@ -77,7 +77,7 @@
 - **Sources:** none
 - **Boundary:** This is a theorem about the finite state machine only; it is not a physical periodicity claim.
 - **Repository provenance:**
-  - `cosmovirus.lean` — `theorem six_step_periodic` (`kernel_checked_theorem`)
+  - `cosmovirus.lean` — `theorem six_step_periodic (layer : CosmoLayer) : psiIterate 6 layer = layer := by` (`kernel_checked_theorem`)
 
 ### COSMO-D-002 — FORMAL
 
@@ -86,7 +86,7 @@
 - **Sources:** none
 - **Boundary:** Reachability is defined inside the project state machine.
 - **Repository provenance:**
-  - `cosmovirus.lean` — `theorem every_layer_reachable` (`kernel_checked_theorem`)
+  - `cosmovirus.lean` — `theorem every_layer_reachable (source target : CosmoLayer) : ReachesWithinCycle source target := by` (`kernel_checked_theorem`)
 
 ### COSMO-D-003 — COMPUTATIONAL
 
