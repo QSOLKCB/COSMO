@@ -321,7 +321,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         namespace = self.load_validator_namespace()
         validate_crosswalk = cast(
             Callable[[str, dict[str, str]], None],
-            namespace["validate_multi_accession_identity"],
+            namespace["validate_reviewed_source_identity"],
         )
         with self.assertRaises(SystemExit):
             validate_crosswalk(
@@ -666,6 +666,120 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             "<!-- Spin(8) causes HPV16 capsid assembly. -->\n",
             {},
         )
+
+    def test_d005_provenance_anchor_is_claim_specific(self) -> None:
+        ledger = self.load_ledger()
+        claim = next(
+            claim for claim in ledger["claims"]
+            if claim["id"] == "COSMO-D-005"
+        )
+        self.assertEqual(
+            claim["provenance"][0]["anchor"],
+            "COSMO-D-005",
+        )
+        source = (REPOSITORY_ROOT / "cosmovirus.tex").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "edge-sharing $\\mathrm{SiS_4}$ tetrahedra (COSMO-D-005)",
+            source,
+        )
+
+    def test_public_claim_scan_keeps_prose_adjacent_to_fenced_blocks(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                (
+                    "Spin(8) triality causes HPV16 capsid assembly.\n"
+                    "```text\n"
+                    "Spin(8) triality causes HPV16 capsid assembly.\n"
+                    "```\n"
+                ),
+                {},
+            )
+        validate_public_claim_text(
+            "README.md",
+            (
+                "```text\n"
+                "Spin(8) triality causes HPV16 capsid assembly.\n"
+                "```\n"
+            ),
+            {},
+        )
+
+    def test_public_claim_guard_detects_enabling_language(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                "Spin(8) triality enables HPV16 capsid assembly.",
+                {},
+            )
+
+    def test_single_accession_source_identity_is_pinned(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_identity = cast(
+            Callable[[str, dict[str, str]], None],
+            namespace["validate_reviewed_source_identity"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_identity(
+                "SRC-HPV16-REFSEQ",
+                {"RefSeq": "NC_001527.1"},
+            )
+        validate_identity(
+            "SRC-HPV16-REFSEQ",
+            {"RefSeq": "NC_001526.4"},
+        )
+
+    def test_source_url_rejects_invalid_dns_hostname(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_source_url = cast(
+            Callable[[str, object], Any],
+            namespace["validate_source_url"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_source_url("SRC-TEST", "https://.")
+
+    def test_visible_markdown_fields_escape_inline_constructs(self) -> None:
+        namespace = self.load_validator_namespace()
+        markdown_text = cast(
+            Callable[[str], str],
+            namespace["markdown_text"],
+        )
+        rendered = markdown_text(
+            "![tracking](https://example.com/pixel)"
+        )
+        self.assertNotIn("![tracking]", rendered)
+        self.assertIn("&#33;&#91;tracking&#93;", rendered)
+
+    def test_public_document_discovery_includes_new_root_documents(self) -> None:
+        namespace = self.load_validator_namespace()
+        discover_paths = cast(
+            Callable[[Path], tuple[str, ...]],
+            namespace["discover_public_governed_paths"],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "README.md").write_text("readme\n", encoding="utf-8")
+            (root / "NEW_PUBLIC.md").write_text(
+                "Spin(8) triality causes HPV16 capsid assembly.\n",
+                encoding="utf-8",
+            )
+            (root / "notes.txt").write_text("not public\n", encoding="utf-8")
+            self.assertEqual(
+                discover_paths(root),
+                ("NEW_PUBLIC.md", "README.md"),
+            )
 
     def test_hpv16_reference_accession_is_versioned(self) -> None:
         ledger = self.load_ledger()
