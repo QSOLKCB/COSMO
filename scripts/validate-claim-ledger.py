@@ -766,11 +766,11 @@ def paragraph_domains(text: str) -> set[str]:
     }
 
 
-def public_assertion_is_negated(
+def public_assertion_clause(
     text: str,
     assertion: re.Match[str],
-) -> bool:
-    """Return whether a negation belongs to the assertion's local clause."""
+) -> str:
+    """Return the sentence/contrast clause containing one assertion."""
     left_boundary = 0
     for boundary in re.finditer(
         r"(?:[.!?;]|\b(?:but|however|yet)\b)",
@@ -789,7 +789,15 @@ def public_assertion_is_negated(
     else:
         right_boundary = assertion.end() + right_match.start()
 
-    clause = text[left_boundary:right_boundary]
+    return text[left_boundary:right_boundary]
+
+
+def public_assertion_is_negated(
+    text: str,
+    assertion: re.Match[str],
+) -> bool:
+    """Return whether a negation belongs to the assertion's local clause."""
+    clause = public_assertion_clause(text, assertion)
     return PUBLIC_NEGATION_RE.search(clause) is not None
 
 
@@ -815,12 +823,18 @@ def validate_public_claim_text(
         if len(domains) < 2:
             continue
         assertions = list(PUBLIC_ASSERTION_RE.finditer(compact))
-        if not assertions:
-            continue
-        if all(
-            public_assertion_is_negated(compact, assertion)
-            for assertion in assertions
-        ):
+        positive_cross_domain_assertions: list[re.Match[str]] = []
+        assertion_domains: set[str] = set()
+        for assertion in assertions:
+            clause = public_assertion_clause(compact, assertion)
+            local_domains = paragraph_domains(clause)
+            if len(local_domains) < 2:
+                continue
+            if public_assertion_is_negated(compact, assertion):
+                continue
+            positive_cross_domain_assertions.append(assertion)
+            assertion_domains.update(local_domains)
+        if not positive_cross_domain_assertions:
             continue
         present_ids = set(CLAIM_ID_SEARCH.findall(compact))
         if not present_ids:
