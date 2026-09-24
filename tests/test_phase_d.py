@@ -188,23 +188,20 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
 
     def test_source_identifiers_must_match_canonical_url(self) -> None:
         namespace = self.load_validator_namespace()
-        validate_source_url = cast(
-            Callable[[str, object], Any],
-            namespace["validate_source_url"],
-        )
-        crosscheck = cast(
-            Callable[[str, Any, dict[str, str]], None],
-            namespace["crosscheck_identifiers_with_url"],
-        )
-        parsed = validate_source_url(
-            "SRC-TEST",
-            "https://pmc.ncbi.nlm.nih.gov/articles/PMC11158331/",
+        validate_identifier_urls = cast(
+            Callable[[str, dict[str, str], object], dict[str, str]],
+            namespace["validate_identifier_urls"],
         )
         with self.assertRaises(SystemExit):
-            crosscheck(
+            validate_identifier_urls(
                 "SRC-TEST",
-                parsed,
                 {"PMCID": "PMC11158332"},
+                {
+                    "PMCID": (
+                        "https://pmc.ncbi.nlm.nih.gov/articles/"
+                        "PMC11158331/"
+                    )
+                },
             )
 
     def test_d010_provenance_anchor_is_claim_specific(self) -> None:
