@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import html
+import ipaddress
 import json
 import re
 import runpy
@@ -37,7 +38,7 @@ IDENTIFIER_PATTERNS: dict[str, re.Pattern[str]] = {
     "year": re.compile(r"(?:19|20)[0-9]{2}$"),
 }
 URL_BOUND_IDENTIFIERS = frozenset({"PMID", "PMCID", "DOI", "RefSeq"})
-PINNED_MULTI_ACCESSION_IDENTIFIERS: dict[str, dict[str, str]] = {
+PINNED_REVIEWED_SOURCE_IDENTIFIERS: dict[str, dict[str, str]] = {
     "SRC-SIS2-PMID-25590815": {
         "PMID": "25590815",
         "DOI": "10.1021/ic501825r",
@@ -45,6 +46,12 @@ PINNED_MULTI_ACCESSION_IDENTIFIERS: dict[str, dict[str, str]] = {
     "SRC-HPV16-E6E7-PMID-17645777": {
         "PMID": "17645777",
         "PMCID": "PMC11158331",
+    },
+    "SRC-HPV16-REFSEQ": {
+        "RefSeq": "NC_001526.4",
+    },
+    "SRC-HPV-P16-PMC8409095": {
+        "PMCID": "PMC8409095",
     },
 }
 PYTHON_DEF_ANCHOR = re.compile(r"def ([A-Za-z_][A-Za-z0-9_]*)$")
@@ -98,12 +105,7 @@ PLACEHOLDER_TEXT = frozenset(
         "later",
     }
 )
-PUBLIC_GOVERNED_PATHS = (
-    "README.md",
-    "KNOWN_LIMITATIONS.md",
-    "cosmovirus.tex",
-    "cosmovirus_cattheory.tex",
-)
+PUBLIC_GOVERNED_SUFFIXES = frozenset({".md", ".tex"})
 PUBLIC_DOMAIN_PATTERNS: dict[str, re.Pattern[str]] = {
     "mathematics": re.compile(
         r"(?:(?<!\w)Spin\(8\)(?!\w)|\b(?:triality|E8|E_8|Weyl)\b)",
@@ -132,6 +134,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"demonstrates?|demonstrated|establishes?|established|"
     r"validates?|validated|predicts?|predicted|induces?|induced|"
     r"triggers?|triggered|promotes?|promoted|mediates?|mediated|"
+    r"enables?|enabled|"
     r"leads?\s+to|results?\s+in|gives?\s+rise\s+to|"
     r"contributes?\s+to|mechanism|corresponds?\s+to|maps?\s+to|"
     r"is\s+responsible\s+for)\b",
@@ -234,8 +237,17 @@ def require_substantive_inline(
 
 
 def markdown_text(value: str) -> str:
-    """Escape raw HTML metacharacters while retaining visible Markdown text."""
-    return html.escape(value, quote=False)
+    """Escape HTML and active inline-Markdown delimiters in visible text."""
+    escaped = html.escape(value, quote=False)
+    replacements = {
+        "\\": "&#92;",
+        "`": "&#96;",
+        "*": "&#42;",
+        "[": "&#91;",
+        "]": "&#93;",
+        "!": "&#33;",
+    }
+    return "".join(replacements.get(character, character) for character in escaped)
 
 
 def markdown_code(value: str) -> str:
@@ -298,9 +310,41 @@ def validate_source_url(source_id: str, value: object) -> SplitResult:
         fail(f"{source_id} has malformed URL: {exc}")
     if parsed.scheme != "https" or not parsed.hostname:
         fail(f"{source_id} must use an absolute HTTPS URL with a hostname")
+    validate_source_hostname(source_id, parsed.hostname)
     if parsed.username is not None or parsed.password is not None:
         fail(f"{source_id} URL may not contain userinfo")
     return parsed
+
+
+def validate_source_hostname(source_id: str, hostname: str) -> None:
+    """Require a valid IP literal or DNS hostname for external source URLs."""
+    try:
+        ipaddress.ip_address(hostname)
+        return
+    except ValueError:
+        pass
+
+    try:
+        ascii_hostname = hostname.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        fail(f"{source_id} hostname is not valid IDNA: {exc}")
+
+    if (
+        not ascii_hostname
+        or len(ascii_hostname) > 253
+        or ascii_hostname.startswith(".")
+        or ascii_hostname.endswith(".")
+    ):
+        fail(f"{source_id} has invalid DNS hostname {hostname!r}")
+
+    label_pattern = re.compile(
+        r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    )
+    labels = ascii_hostname.split(".")
+    if len(labels) < 2 or any(
+        label_pattern.fullmatch(label) is None for label in labels
+    ):
+        fail(f"{source_id} has invalid DNS hostname {hostname!r}")
 
 
 def canonical_identifier_url(identifier_type: str, value: str) -> str:
@@ -316,29 +360,30 @@ def canonical_identifier_url(identifier_type: str, value: str) -> str:
     raise AssertionError(f"identifier type {identifier_type!r} is not URL-bound")
 
 
-def validate_multi_accession_identity(
+def validate_reviewed_source_identity(
     source_id: str,
     identifiers: dict[str, str],
 ) -> None:
-    """Bind every multi-accession source to one reviewed article identity."""
+    """Bind reviewed URL-addressable identifiers to the intended source."""
     article_identifiers = {
         key: value
         for key, value in identifiers.items()
         if key in URL_BOUND_IDENTIFIERS
     }
-    if len(article_identifiers) <= 1:
+    expected = PINNED_REVIEWED_SOURCE_IDENTIFIERS.get(source_id)
+
+    if expected is None:
+        if len(article_identifiers) > 1:
+            fail(
+                f"{source_id} multi-accession record lacks a reviewed "
+                "crosswalk in the validator"
+            )
         return
 
-    expected = PINNED_MULTI_ACCESSION_IDENTIFIERS.get(source_id)
-    if expected is None:
-        fail(
-            f"{source_id} multi-accession record lacks a reviewed "
-            "crosswalk in the validator"
-        )
     if article_identifiers != expected:
         fail(
-            f"{source_id} identifiers do not match the reviewed "
-            f"multi-accession crosswalk: expected {expected!r}"
+            f"{source_id} identifiers do not match the reviewed source "
+            f"identity: expected {expected!r}"
         )
 
 
@@ -844,7 +889,7 @@ def render_index(ledger: dict[str, Any]) -> str:
         url = require_inline_string(source.get("url"), f"{source_id} url")
         parsed = validate_source_url(source_id, url)
         identifiers = validate_identifiers(source_id, source.get("identifiers"))
-        validate_multi_accession_identity(source_id, identifiers)
+        validate_reviewed_source_identity(source_id, identifiers)
         identifier_urls = validate_identifier_urls(
             source_id,
             identifiers,
@@ -1099,13 +1144,45 @@ def _blank_non_newlines(value: str) -> str:
     return "".join("\n" if character == "\n" else " " for character in value)
 
 
+def strip_markdown_fenced_blocks(text: str) -> str:
+    """Blank fenced code blocks without discarding adjacent rendered prose."""
+    lines: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
+
+    for line in text.splitlines(keepends=True):
+        if fence_character is None:
+            match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+            if match is None:
+                lines.append(line)
+                continue
+            marker = match.group(1)
+            fence_character = marker[0]
+            fence_length = len(marker)
+            lines.append(_blank_non_newlines(line))
+            continue
+
+        lines.append(_blank_non_newlines(line))
+        closing = re.match(
+            rf"^ {{0,3}}{re.escape(fence_character)}{{{fence_length},}}\s*$",
+            line.rstrip("\n"),
+        )
+        if closing is not None:
+            fence_character = None
+            fence_length = 0
+
+    return "".join(lines)
+
+
 def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
-    """Remove Markdown HTML and LaTeX comments before public-claim scanning."""
+    """Remove non-rendered comments/code before public-claim scanning."""
     text = re.sub(
         r"<!--[\s\S]*?(?:-->|$)",
         lambda match: _blank_non_newlines(match.group(0)),
         text,
     )
+    if path_text.endswith(".md"):
+        text = strip_markdown_fenced_blocks(text)
     if not path_text.endswith(".tex"):
         return text
 
@@ -1148,7 +1225,6 @@ def validate_public_claim_text(
         if (
             "\\begin{tabular}" in paragraph
             or "\\begin{longtable}" in paragraph
-            or "```" in paragraph
             or compact.startswith("|")
         ):
             continue
@@ -1215,9 +1291,24 @@ def validate_scientific_sources(
             )
 
 
+def discover_public_governed_paths(root: Path = ROOT) -> tuple[str, ...]:
+    """Discover repository-root Markdown/LaTeX documents governed by Phase D."""
+    paths = tuple(
+        sorted(
+            path.name
+            for path in root.iterdir()
+            if path.is_file()
+            and path.suffix.lower() in PUBLIC_GOVERNED_SUFFIXES
+        )
+    )
+    if not paths:
+        fail("no repository-root public Markdown/LaTeX documents found")
+    return paths
+
+
 def validate_public_documents(claim_classes: dict[str, str]) -> None:
-    """Apply the public cross-domain claim-ID guard to governed documents."""
-    for path_text in PUBLIC_GOVERNED_PATHS:
+    """Apply the public cross-domain claim-ID guard to discovered documents."""
+    for path_text in discover_public_governed_paths():
         path = ROOT / path_text
         try:
             text = path.read_text(encoding="utf-8")
@@ -1258,7 +1349,7 @@ def validate() -> None:
         require_inline_string(source.get("title"), f"{source_id} title")
         parsed = validate_source_url(source_id, source.get("url"))
         identifiers = validate_identifiers(source_id, source.get("identifiers"))
-        validate_multi_accession_identity(source_id, identifiers)
+        validate_reviewed_source_identity(source_id, identifiers)
         identifier_urls = validate_identifier_urls(
             source_id,
             identifiers,
