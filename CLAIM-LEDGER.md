@@ -106,7 +106,7 @@
 - **Sources:** SRC-SPIN8-PTEP-2021
 - **Boundary:** This mathematical fact does not establish a mechanism connecting Spin(8) triality to HPV, capsids, SiS2, or cosmology.
 - **Repository provenance:**
-  - `cosmovirus.tex` — `Triality automorphism` (`documented_context`)
+  - `cosmovirus.tex` — `COSMO-D-004` (`documented_context`)
 
 ### COSMO-D-005 — SCIENTIFIC
 
