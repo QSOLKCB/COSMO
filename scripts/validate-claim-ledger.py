@@ -1248,6 +1248,13 @@ def render_index(ledger: dict[str, Any]) -> str:
         source_domain = validate_source_domain(source_id, source.get("domain"))
         title = require_inline_string(source.get("title"), f"{source_id} title")
         url = require_inline_string(source.get("url"), f"{source_id} url")
+        validate_reviewed_source_record(
+            source_id,
+            kind,
+            title,
+            url,
+            source_domain,
+        )
         parsed = validate_source_url(source_id, url)
         identifiers = validate_identifiers(source_id, source.get("identifiers"))
         validate_reviewed_source_identity(source_id, identifiers)
@@ -1801,8 +1808,16 @@ def validate() -> None:
         source_kinds[source_id] = kind
         source_domain = validate_source_domain(source_id, source.get("domain"))
         source_domains[source_id] = source_domain
-        require_inline_string(source.get("title"), f"{source_id} title")
-        parsed = validate_source_url(source_id, source.get("url"))
+        title = require_inline_string(source.get("title"), f"{source_id} title")
+        url = require_inline_string(source.get("url"), f"{source_id} url")
+        validate_reviewed_source_record(
+            source_id,
+            kind,
+            title,
+            url,
+            source_domain,
+        )
+        parsed = validate_source_url(source_id, url)
         identifiers = validate_identifiers(source_id, source.get("identifiers"))
         validate_reviewed_source_identity(source_id, identifiers)
         identifier_urls = validate_identifier_urls(
