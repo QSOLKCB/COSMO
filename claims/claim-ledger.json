@@ -13,7 +13,9 @@
       "kind": "scholarly_reference",
       "title": "Gosset Polytope — E8 root polytope",
       "url": "https://mathworld.wolfram.com/GossetPolytope.html",
-      "identifiers": {}
+      "identifiers": {},
+      "domain": "mathematics",
+      "identifier_urls": {}
     },
     {
       "id": "SRC-SPIN8-PTEP-2021",
@@ -22,7 +24,9 @@
       "url": "https://academic.oup.com/ptep/article/2021/8/08B102/6353037",
       "identifiers": {
         "year": "2021"
-      }
+      },
+      "domain": "mathematics",
+      "identifier_urls": {}
     },
     {
       "id": "SRC-SIS2-PMID-25590815",
@@ -32,6 +36,11 @@
       "identifiers": {
         "PMID": "25590815",
         "DOI": "10.1021/ic501825r"
+      },
+      "domain": "materials_science",
+      "identifier_urls": {
+        "PMID": "https://pubmed.ncbi.nlm.nih.gov/25590815/",
+        "DOI": "https://doi.org/10.1021/ic501825r"
       }
     },
     {
@@ -41,6 +50,10 @@
       "url": "https://www.ncbi.nlm.nih.gov/nuccore/NC_001526.4",
       "identifiers": {
         "RefSeq": "NC_001526.4"
+      },
+      "domain": "biomedicine",
+      "identifier_urls": {
+        "RefSeq": "https://www.ncbi.nlm.nih.gov/nuccore/NC_001526.4"
       }
     },
     {
@@ -51,6 +64,11 @@
       "identifiers": {
         "PMID": "17645777",
         "PMCID": "PMC11158331"
+      },
+      "domain": "biomedicine",
+      "identifier_urls": {
+        "PMID": "https://pubmed.ncbi.nlm.nih.gov/17645777/",
+        "PMCID": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11158331/"
       }
     },
     {
@@ -60,6 +78,10 @@
       "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8409095/",
       "identifiers": {
         "PMCID": "PMC8409095"
+      },
+      "domain": "biomedicine",
+      "identifier_urls": {
+        "PMCID": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8409095/"
       }
     }
   ],
@@ -135,7 +157,8 @@
         "SRC-SPIN8-PTEP-2021"
       ],
       "falsification": null,
-      "boundary": "This mathematical fact does not establish a mechanism connecting Spin(8) triality to HPV, capsids, SiS2, or cosmology."
+      "boundary": "This mathematical fact does not establish a mechanism connecting Spin(8) triality to HPV, capsids, SiS2, or cosmology.",
+      "domain": "mathematics"
     },
     {
       "id": "COSMO-D-005",
@@ -153,7 +176,8 @@
         "SRC-SIS2-PMID-25590815"
       ],
       "falsification": null,
-      "boundary": "This crystallographic fact does not support COSMO's symbolic substrate or life-code interpretation."
+      "boundary": "This crystallographic fact does not support COSMO's symbolic substrate or life-code interpretation.",
+      "domain": "materials_science"
     },
     {
       "id": "COSMO-D-006",
@@ -171,7 +195,8 @@
         "SRC-HPV16-REFSEQ"
       ],
       "falsification": null,
-      "boundary": "The accession identifies a reference genome; it does not validate COSMO's state-machine use of the HPV16Layer label."
+      "boundary": "The accession identifies a reference genome; it does not validate COSMO's state-machine use of the HPV16Layer label.",
+      "domain": "biomedicine"
     },
     {
       "id": "COSMO-D-007",
@@ -189,7 +214,8 @@
         "SRC-HPV16-E6E7-PMID-17645777"
       ],
       "falsification": null,
-      "boundary": "This biomedical mechanism is external scientific context and is not a mechanism for COSMO transitions."
+      "boundary": "This biomedical mechanism is external scientific context and is not a mechanism for COSMO transitions.",
+      "domain": "biomedicine"
     },
     {
       "id": "COSMO-D-008",
@@ -207,7 +233,8 @@
         "SRC-HPV-P16-PMC8409095"
       ],
       "falsification": null,
-      "boundary": "COSMO must not equate a generic p16-positive label with HPV16 infection or active viral transcription."
+      "boundary": "COSMO must not equate a generic p16-positive label with HPV16 infection or active viral transcription.",
+      "domain": "biomedicine"
     },
     {
       "id": "COSMO-D-009",
