@@ -714,6 +714,13 @@ def validate_public_claim_text(
         compact = " ".join(paragraph.split())
         if not compact:
             continue
+        if (
+            "\\begin{tabular}" in paragraph
+            or "\\begin{longtable}" in paragraph
+            or "```" in paragraph
+            or compact.startswith("|")
+        ):
+            continue
         domains = paragraph_domains(compact)
         if len(domains) < 2:
             continue
