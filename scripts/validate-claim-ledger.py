@@ -9,6 +9,7 @@ import ipaddress
 import json
 import re
 import runpy
+import subprocess
 import unittest
 from pathlib import Path
 from typing import Any, Never, cast
@@ -26,9 +27,6 @@ SOURCE_ID = re.compile(r"SRC-[A-Z0-9][A-Z0-9._-]*$")
 LEAN_THEOREM_ANCHOR = re.compile(
     r"theorem ([A-Za-z_][A-Za-z0-9_']*)\b.+:=\s*by$"
 )
-PROTECTED_LEAN_SOURCE_RE = re.compile(
-    r"(?m)^compile_project_module\s+([A-Za-z0-9_./-]+\.lean)\s+"
-)
 PUBLIC_CROSS_DOMAIN_GOVERNING_CLASSES = frozenset({"HYPOTHESIS", "SYMBOLIC"})
 IDENTIFIER_PATTERNS: dict[str, re.Pattern[str]] = {
     "PMID": re.compile(r"[1-9][0-9]{0,7}$"),
@@ -38,6 +36,13 @@ IDENTIFIER_PATTERNS: dict[str, re.Pattern[str]] = {
     "year": re.compile(r"(?:19|20)[0-9]{2}$"),
 }
 URL_BOUND_IDENTIFIERS = frozenset({"PMID", "PMCID", "DOI", "RefSeq"})
+PINNED_SCIENTIFIC_CLAIM_SOURCES: dict[str, tuple[str, ...]] = {
+    "COSMO-D-004": ("SRC-SPIN8-PTEP-2021",),
+    "COSMO-D-005": ("SRC-SIS2-PMID-25590815",),
+    "COSMO-D-006": ("SRC-HPV16-REFSEQ",),
+    "COSMO-D-007": ("SRC-HPV16-E6E7-PMID-17645777",),
+    "COSMO-D-008": ("SRC-HPV-P16-PMC8409095",),
+}
 PINNED_REVIEWED_SOURCE_IDENTIFIERS: dict[str, dict[str, str]] = {
     "SRC-SIS2-PMID-25590815": {
         "PMID": "25590815",
@@ -127,6 +132,26 @@ PUBLIC_DOMAIN_PATTERNS: dict[str, re.Pattern[str]] = {
         r"\b(?:cosmic|cosmology|Ouroboros)\b",
         re.IGNORECASE,
     ),
+}
+PUBLIC_ENTITY_PATTERNS: dict[str, re.Pattern[str]] = {
+    "spin8": re.compile(r"(?<!\w)Spin\(8\)(?!\w)", re.IGNORECASE),
+    "triality": re.compile(r"\btriality\b", re.IGNORECASE),
+    "e8": re.compile(r"\b(?:E8|E_8)\b", re.IGNORECASE),
+    "weyl": re.compile(r"\bWeyl\b", re.IGNORECASE),
+    "hpv": re.compile(r"\b(?:HPV16|HPV)\b", re.IGNORECASE),
+    "capsid": re.compile(r"\bcapsid\b", re.IGNORECASE),
+    "e6": re.compile(r"\bE6\b", re.IGNORECASE),
+    "e7": re.compile(r"\bE7\b", re.IGNORECASE),
+    "p16": re.compile(r"\bp16\b", re.IGNORECASE),
+    "sis2": re.compile(
+        r"\b(?:SiS2|SiS_2|silicon disulfide)\b",
+        re.IGNORECASE,
+    ),
+    "cuneiform": re.compile(r"\bcuneiform\b", re.IGNORECASE),
+    "sumerian": re.compile(r"\bSumerian\b", re.IGNORECASE),
+    "archaeology": re.compile(r"\barchaeolog(?:y|ical)\b", re.IGNORECASE),
+    "cosmology": re.compile(r"\b(?:cosmic|cosmology)\b", re.IGNORECASE),
+    "ouroboros": re.compile(r"\bOuroboros\b", re.IGNORECASE),
 }
 PUBLIC_ASSERTION_RE = re.compile(
     r"\b(?:causes?|caused|drives?|driven|produces?|produced|"
@@ -527,14 +552,45 @@ def strip_lean_comments(text: str) -> str:
 
 
 def protected_lean_sources() -> set[str]:
-    """Return sources compiled into the protected Lean audit closure."""
+    """Execute the protected runner's source-inventory mode."""
     try:
-        script = PROTECTED_LEAN_COMPILE_SCRIPT.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        fail(f"cannot read protected Lean compile script: {exc}")
-    sources = set(PROTECTED_LEAN_SOURCE_RE.findall(script))
+        completed = subprocess.run(
+            [
+                "bash",
+                str(PROTECTED_LEAN_COMPILE_SCRIPT),
+                "--print-project-sources",
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        fail(f"cannot execute protected Lean source inventory: {exc}")
+
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        fail(
+            "protected Lean source inventory failed"
+            + (f": {detail}" if detail else "")
+        )
+
+    sources = {
+        line.strip()
+        for line in completed.stdout.splitlines()
+        if line.strip()
+    }
     if not sources:
-        fail("protected Lean compile script declares no project modules")
+        fail("protected Lean source inventory returned no project modules")
+    for source in sources:
+        relative = Path(source)
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or relative.suffix != ".lean"
+            or len(relative.parts) != 1
+        ):
+            fail(f"protected Lean source inventory contains invalid path {source!r}")
     return sources
 
 
@@ -572,13 +628,42 @@ def validate_formal_provenance_target(
         )
 
 
+class _YieldFinder(ast.NodeVisitor):
+    """Detect yield in one function body without descending into nested functions."""
+
+    def __init__(self) -> None:
+        self.found = False
+
+    def visit_Yield(self, node: ast.Yield) -> None:
+        self.found = True
+
+    def visit_YieldFrom(self, node: ast.YieldFrom) -> None:
+        self.found = True
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+
+def function_contains_yield(node: ast.FunctionDef) -> bool:
+    finder = _YieldFinder()
+    for statement in node.body:
+        finder.visit(statement)
+    return finder.found
+
+
 def locate_unittest_regression(
     claim_id: str,
     path_text: str,
     anchor: str,
     text: str,
-) -> str:
-    """Locate exactly one unittest method used as regression evidence."""
+) -> tuple[str, ast.FunctionDef]:
+    """Locate exactly one synchronous, non-generator unittest method."""
     if not path_text.startswith("tests/") or not Path(path_text).name.startswith("test_"):
         fail(
             f"{claim_id} regression provenance must point to a tests/test_*.py file"
@@ -590,7 +675,7 @@ def locate_unittest_regression(
     except SyntaxError as exc:
         fail(f"{claim_id} regression source {path_text} is invalid Python: {exc}")
 
-    matches: list[str] = []
+    matches: list[tuple[str, ast.FunctionDef]] = []
     for node in tree.body:
         if not isinstance(node, ast.ClassDef):
             continue
@@ -601,13 +686,128 @@ def locate_unittest_regression(
                     "Phase D requires a synchronously executed unittest method"
                 )
             if isinstance(member, ast.FunctionDef) and member.name == anchor:
-                matches.append(node.name)
+                if function_contains_yield(member):
+                    fail(
+                        f"{claim_id} regression anchor {anchor!r} may not be "
+                        "a generator; its body must execute synchronously"
+                    )
+                matches.append((node.name, member))
     if len(matches) != 1:
         fail(
             f"{claim_id} regression anchor {anchor!r} must identify exactly "
             f"one unittest method in {path_text}"
         )
     return matches[0]
+
+
+def _implementation_module_name(path_text: str) -> str:
+    relative = Path(path_text)
+    return ".".join(relative.with_suffix("").parts)
+
+
+def _package_reexports_function(
+    module_name: str,
+    function_name: str,
+) -> bool:
+    package_path = ROOT / "cosmo_core" / "__init__.py"
+    try:
+        tree = ast.parse(
+            package_path.read_text(encoding="utf-8"),
+            filename=str(package_path),
+        )
+    except (OSError, UnicodeError, SyntaxError) as exc:
+        fail(f"cannot inspect cosmo_core re-exports: {exc}")
+
+    expected_module = module_name.removeprefix("cosmo_core.")
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level != 1 or node.module != expected_module:
+            continue
+        if any(alias.name == function_name for alias in node.names):
+            return True
+    return False
+
+
+def _regression_imports_implementation(
+    regression_tree: ast.Module,
+    module_name: str,
+    function_name: str,
+) -> bool:
+    for node in regression_tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level != 0:
+            continue
+        if node.module == module_name and any(
+            alias.name == function_name for alias in node.names
+        ):
+            return True
+        if node.module == "cosmo_core" and any(
+            alias.name == function_name for alias in node.names
+        ):
+            return _package_reexports_function(module_name, function_name)
+    return False
+
+
+def _regression_calls_function(
+    method: ast.FunctionDef,
+    function_name: str,
+) -> bool:
+    for node in ast.walk(method):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id == function_name:
+            return True
+        if isinstance(node.func, ast.Attribute) and node.func.attr == function_name:
+            return True
+    return False
+
+
+def validate_computational_evidence_connection(
+    claim_id: str,
+    implementation_path: str,
+    implementation_anchor: str,
+    regression_path: str,
+    regression_anchor: str,
+    regression_text: str,
+) -> None:
+    """Prove the claimed regression imports and calls the declared implementation."""
+    match = PYTHON_DEF_ANCHOR.fullmatch(implementation_anchor)
+    if match is None:
+        fail(f"{claim_id} implementation anchor is malformed")
+    function_name = match.group(1)
+    module_name = _implementation_module_name(implementation_path)
+
+    try:
+        regression_tree = ast.parse(
+            regression_text,
+            filename=regression_path,
+        )
+    except SyntaxError as exc:
+        fail(f"{claim_id} regression source {regression_path} is invalid Python: {exc}")
+
+    class_name, method = locate_unittest_regression(
+        claim_id,
+        regression_path,
+        regression_anchor,
+        regression_text,
+    )
+    if not _regression_imports_implementation(
+        regression_tree,
+        module_name,
+        function_name,
+    ):
+        fail(
+            f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
+            f"does not import {function_name} from declared implementation "
+            f"{implementation_path}"
+        )
+    if not _regression_calls_function(method, function_name):
+        fail(
+            f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
+            f"does not call declared implementation function {function_name}"
+        )
 
 
 def validate_computational_implementation_target(
@@ -663,7 +863,7 @@ def validate_computational_regression_target(
     text: str,
 ) -> None:
     """Execute the exact unittest method claimed as computational evidence."""
-    class_name = locate_unittest_regression(
+    class_name, _method = locate_unittest_regression(
         claim_id,
         path_text,
         anchor,
@@ -723,6 +923,8 @@ def validate_provenance(
 
     allowed_roles = ALLOWED_PROVENANCE_ROLES[evidence_class]
     roles: set[str] = set()
+    implementation_evidence: tuple[str, str] | None = None
+    regression_evidence: tuple[str, str, str] | None = None
     for index, item in enumerate(entries):
         if not isinstance(item, dict):
             fail(f"{claim_id} provenance[{index}] must be an object")
@@ -767,6 +969,7 @@ def validate_provenance(
                     anchor,
                     text,
                 )
+                implementation_evidence = (path_text, anchor)
             if evidence_class == "COMPUTATIONAL" and role == "regression":
                 validate_computational_regression_target(
                     claim_id,
@@ -775,6 +978,7 @@ def validate_provenance(
                     path,
                     text,
                 )
+                regression_evidence = (path_text, anchor, text)
 
     if evidence_class == "FORMAL" and "kernel_checked_theorem" not in roles:
         fail(f"{claim_id} FORMAL claim requires kernel-checked theorem evidence")
@@ -785,6 +989,18 @@ def validate_provenance(
                 f"{claim_id} COMPUTATIONAL claim requires implementation "
                 "and regression provenance"
             )
+        if implementation_evidence is None or regression_evidence is None:
+            fail(
+                f"{claim_id} COMPUTATIONAL claim evidence could not be linked"
+            )
+        validate_computational_evidence_connection(
+            claim_id,
+            implementation_evidence[0],
+            implementation_evidence[1],
+            regression_evidence[0],
+            regression_evidence[1],
+            regression_evidence[2],
+        )
     return roles
 
 
@@ -1048,6 +1264,43 @@ def render_index(ledger: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def public_entities(text: str) -> set[str]:
+    """Return controlled public entities/concepts named in text."""
+    return {
+        entity
+        for entity, pattern in PUBLIC_ENTITY_PATTERNS.items()
+        if pattern.search(text) is not None
+    }
+
+
+def public_claim_semantics() -> dict[str, tuple[set[str], set[str]]]:
+    """Build semantic signatures from canonical claim statements/boundaries."""
+    ledger = load_json()
+    raw_claims = ledger.get("claims")
+    if not isinstance(raw_claims, list):
+        fail("claims must be an array")
+
+    result: dict[str, tuple[set[str], set[str]]] = {}
+    for claim in raw_claims:
+        if not isinstance(claim, dict):
+            fail("claim entries must be objects")
+        claim_id = require_inline_string(claim.get("id"), "claim id")
+        statement = require_inline_string(
+            claim.get("statement"),
+            f"{claim_id} statement",
+        )
+        boundary = require_inline_string(
+            claim.get("boundary"),
+            f"{claim_id} boundary",
+        )
+        combined = statement + " " + boundary
+        result[claim_id] = (
+            paragraph_domains(combined),
+            public_entities(combined),
+        )
+    return result
+
+
 def paragraph_domains(text: str) -> set[str]:
     """Return controlled semantic domains named in one public paragraph."""
     return {
@@ -1090,14 +1343,14 @@ def public_assertion_binding_scope(
     """Return the punctuation-bounded proposition used to bind a claim ID."""
     left_boundary = 0
     for boundary in re.finditer(
-        r"(?:[.!?;,]|\b(?:but|however|yet|although|though|while|whereas)\b)",
+        r"(?:[.!?;,|]|\b(?:but|however|yet|although|though|while|whereas)\b)",
         text[:assertion.start()],
         re.IGNORECASE,
     ):
         left_boundary = boundary.end()
 
     right_match = re.search(
-        r"(?:[.!?;,]|\b(?:but|however|yet)\b)",
+        r"(?:[.!?;,|]|\b(?:but|however|yet)\b)",
         text[assertion.end():],
         re.IGNORECASE,
     )
@@ -1115,7 +1368,7 @@ def public_assertion_is_negated(
     """Return whether negation locally governs the assertion predicate."""
     prefix_start = 0
     for boundary in re.finditer(
-        r"(?:[.!?;,]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
+        r"(?:[.!?;,|]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
         text[:assertion.start()],
         re.IGNORECASE,
     ):
@@ -1126,7 +1379,7 @@ def public_assertion_is_negated(
 
     suffix = text[assertion.end():]
     suffix_boundary = re.search(
-        r"(?:[.!?;,]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
+        r"(?:[.!?;,|]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
         suffix,
         re.IGNORECASE,
     )
@@ -1225,7 +1478,6 @@ def validate_public_claim_text(
         if (
             "\\begin{tabular}" in paragraph
             or "\\begin{longtable}" in paragraph
-            or compact.startswith("|")
         ):
             continue
         if len(paragraph_domains(compact)) < 2:
@@ -1253,12 +1505,25 @@ def validate_public_claim_text(
                     f"{path_text} paragraph {paragraph_number} assertion "
                     f"references unknown claim IDs {sorted(unknown)}"
                 )
-            governing_ids = {
-                claim_id
-                for claim_id in present_ids
-                if claim_classes[claim_id]
-                in PUBLIC_CROSS_DOMAIN_GOVERNING_CLASSES
-            }
+            semantics = public_claim_semantics()
+            local_entities = public_entities(clause)
+            governing_ids: set[str] = set()
+            for claim_id in present_ids:
+                if (
+                    claim_classes[claim_id]
+                    not in PUBLIC_CROSS_DOMAIN_GOVERNING_CLASSES
+                ):
+                    continue
+                claim_domains, claim_entities = semantics.get(
+                    claim_id,
+                    (set(), set()),
+                )
+                entity_overlap = local_entities & claim_entities
+                if (
+                    local_domains.issubset(claim_domains)
+                    and len(entity_overlap) >= min(2, len(local_entities))
+                ):
+                    governing_ids.add(claim_id)
             if not governing_ids:
                 fail(
                     f"{path_text} paragraph {paragraph_number} assertion "
@@ -1274,9 +1539,19 @@ def validate_scientific_sources(
     source_kinds: dict[str, str],
     source_domains: dict[str, str],
 ) -> None:
-    """Require scholarly sources from the same controlled scientific domain."""
+    """Require the reviewed scholarly source set for each scientific claim."""
     if not source_ids:
         fail(f"{claim_id} SCIENTIFIC claim requires an external source")
+    expected_sources = PINNED_SCIENTIFIC_CLAIM_SOURCES.get(claim_id)
+    if expected_sources is None:
+        fail(
+            f"{claim_id} SCIENTIFIC claim lacks a reviewed source binding"
+        )
+    if tuple(source_ids) != expected_sources:
+        fail(
+            f"{claim_id} SCIENTIFIC sources must exactly match reviewed "
+            f"binding {list(expected_sources)}"
+        )
     for source_id in source_ids:
         if source_kinds[source_id] not in ALLOWED_SOURCE_KINDS:
             fail(
@@ -1292,17 +1567,20 @@ def validate_scientific_sources(
 
 
 def discover_public_governed_paths(root: Path = ROOT) -> tuple[str, ...]:
-    """Discover repository-root Markdown/LaTeX documents governed by Phase D."""
+    """Discover Markdown/LaTeX documents recursively under the repository."""
     paths = tuple(
         sorted(
-            path.name
-            for path in root.iterdir()
+            path.relative_to(root).as_posix()
+            for path in root.rglob("*")
             if path.is_file()
             and path.suffix.lower() in PUBLIC_GOVERNED_SUFFIXES
+            and ".git" not in path.relative_to(root).parts
+            and ".lake" not in path.relative_to(root).parts
+            and "__pycache__" not in path.relative_to(root).parts
         )
     )
     if not paths:
-        fail("no repository-root public Markdown/LaTeX documents found")
+        fail("no public Markdown/LaTeX documents found")
     return paths
 
 
