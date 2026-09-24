@@ -66,80 +66,295 @@ PINNED_REVIEWED_SCIENTIFIC_STATEMENTS: dict[str, str] = {
         "direct evidence of active E6/E7 transcription."
     ),
 }
-PINNED_REVIEWED_CLAIM_DEFINITIONS: dict[str, tuple[str, str]] = {
+PINNED_REVIEWED_CLAIM_RECORDS: dict[str, dict[str, Any]] = cast(
+    dict[str, dict[str, Any]],
+    json.loads(
+        r'''{
+  "COSMO-D-001": {
+    "id": "COSMO-D-001",
+    "class": "FORMAL",
+    "status": "SUPPORTED",
+    "statement": "For every CosmoLayer, six applications of the authoritative Lean transition return the layer to itself.",
+    "provenance": [
+      {
+        "path": "cosmovirus.lean",
+        "anchor": "theorem six_step_periodic (layer : CosmoLayer) : psiIterate 6 layer = layer := by",
+        "role": "kernel_checked_theorem"
+      }
+    ],
+    "sources": [],
+    "falsification": null,
+    "boundary": "This is a theorem about the finite state machine only; it is not a physical periodicity claim."
+  },
+  "COSMO-D-002": {
+    "id": "COSMO-D-002",
+    "class": "FORMAL",
+    "status": "SUPPORTED",
+    "statement": "Every authoritative COSMO layer reaches every other layer within one complete six-state orbit.",
+    "provenance": [
+      {
+        "path": "cosmovirus.lean",
+        "anchor": "theorem every_layer_reachable (source target : CosmoLayer) : ReachesWithinCycle source target := by",
+        "role": "kernel_checked_theorem"
+      }
+    ],
+    "sources": [],
+    "falsification": null,
+    "boundary": "Reachability is defined inside the project state machine."
+  },
+  "COSMO-D-003": {
+    "id": "COSMO-D-003",
+    "class": "COMPUTATIONAL",
+    "status": "SUPPORTED",
+    "statement": "The Phase B3 Python reference generator deterministically constructs 240 unique E8 roots with rank 8 and squared norm 2, and the canonical table is bound to a reviewed SHA-256.",
+    "provenance": [
+      {
+        "path": "cosmo_core/e8.py",
+        "anchor": "def validate_e8_root_system",
+        "role": "implementation"
+      },
+      {
+        "path": "tests/test_phase_b3.py",
+        "anchor": "test_root_system_report_has_rank_eight_and_norm_two",
+        "role": "regression"
+      }
+    ],
+    "sources": [
+      "SRC-E8-MATHWORLD"
+    ],
+    "falsification": null,
+    "boundary": "This is deterministic computational evidence; the local Lean core does not yet formalize the E8 root construction."
+  },
+  "COSMO-D-004": {
+    "id": "COSMO-D-004",
+    "class": "SCIENTIFIC",
+    "status": "SUPPORTED",
+    "statement": "Spin(8) has triality symmetry with an S3 outer automorphism action that permutes its vector and two spinor eight-dimensional representations.",
+    "provenance": [
+      {
+        "path": "cosmovirus.tex",
+        "anchor": "COSMO-D-004",
+        "role": "documented_context"
+      }
+    ],
+    "sources": [
+      "SRC-SPIN8-PTEP-2021"
+    ],
+    "falsification": null,
+    "boundary": "This mathematical fact does not establish a mechanism connecting Spin(8) triality to HPV, capsids, SiS2, or cosmology.",
+    "domain": "mathematics"
+  },
+  "COSMO-D-005": {
+    "id": "COSMO-D-005",
+    "class": "SCIENTIFIC",
+    "status": "SUPPORTED",
+    "statement": "The ambient-pressure phase of SiS2 is orthorhombic and contains chains of distorted edge-sharing SiS4 tetrahedra.",
+    "provenance": [
+      {
+        "path": "cosmovirus.tex",
+        "anchor": "COSMO-D-005",
+        "role": "documented_context"
+      }
+    ],
+    "sources": [
+      "SRC-SIS2-PMID-25590815"
+    ],
+    "falsification": null,
+    "boundary": "This crystallographic fact does not support COSMO's symbolic substrate or life-code interpretation.",
+    "domain": "materials_science"
+  },
+  "COSMO-D-006": {
+    "id": "COSMO-D-006",
+    "class": "SCIENTIFIC",
+    "status": "SUPPORTED",
+    "statement": "The NCBI reference sequence used for human papillomavirus type 16 in this ledger is RefSeq NC_001526.4.",
+    "provenance": [
+      {
+        "path": "CLAIM-LEDGER.md",
+        "anchor": "NC_001526.4",
+        "role": "provenance_record"
+      }
+    ],
+    "sources": [
+      "SRC-HPV16-REFSEQ"
+    ],
+    "falsification": null,
+    "boundary": "The accession identifies a reference genome; it does not validate COSMO's state-machine use of the HPV16Layer label.",
+    "domain": "biomedicine"
+  },
+  "COSMO-D-007": {
+    "id": "COSMO-D-007",
+    "class": "SCIENTIFIC",
+    "status": "SUPPORTED",
+    "statement": "High-risk HPV E6 and E7 proteins are established carcinogenesis factors; E6 promotes p53 degradation and E7 disrupts pRb/E2F control.",
+    "provenance": [
+      {
+        "path": "cosmovirus.tex",
+        "anchor": "COSMO-D-007",
+        "role": "documented_context"
+      }
+    ],
+    "sources": [
+      "SRC-HPV16-E6E7-PMID-17645777"
+    ],
+    "falsification": null,
+    "boundary": "This biomedical mechanism is external scientific context and is not a mechanism for COSMO transitions.",
+    "domain": "biomedicine"
+  },
+  "COSMO-D-008": {
+    "id": "COSMO-D-008",
+    "class": "SCIENTIFIC",
+    "status": "SUPPORTED_WITH_SCOPE",
+    "statement": "p16 immunohistochemistry is used as a surrogate marker for HPV-associated disease in some clinical contexts, but p16 positivity is not identical to direct evidence of active E6/E7 transcription.",
+    "provenance": [
+      {
+        "path": "cosmovirus.tex",
+        "anchor": "COSMO-D-008",
+        "role": "documented_context"
+      }
+    ],
+    "sources": [
+      "SRC-HPV-P16-PMC8409095"
+    ],
+    "falsification": null,
+    "boundary": "COSMO must not equate a generic p16-positive label with HPV16 infection or active viral transcription.",
+    "domain": "biomedicine"
+  },
+  "COSMO-D-009": {
+    "id": "COSMO-D-009",
+    "class": "SYMBOLIC",
+    "status": "PROJECT_DEFINED",
+    "statement": "The byte-to-cuneiform labels in COSMO are project-defined symbolic annotations.",
+    "provenance": [
+      {
+        "path": "cosmovirus.lean",
+        "anchor": "def cuneiformAnnotation",
+        "role": "project_definition"
+      },
+      {
+        "path": "KNOWN_LIMITATIONS.md",
+        "anchor": "Cuneiform strings are project-defined symbolic annotations",
+        "role": "scope_boundary"
+      }
+    ],
+    "sources": [],
+    "falsification": null,
+    "boundary": "They are not a decipherment, transliteration, translation, archaeological attribution, or historical sentence.",
+    "empirical_status": "NON_EMPIRICAL"
+  },
+  "COSMO-D-010": {
+    "id": "COSMO-D-010",
+    "class": "SYMBOLIC",
+    "status": "PROJECT_DEFINED",
+    "statement": "COSMO's language of undivided cosmic symmetry, life-code substrate, infected reality, and Ouroboros self-causation is symbolic/interpretive vocabulary.",
+    "provenance": [
+      {
+        "path": "cosmovirus.tex",
+        "anchor": "COSMO-D-010",
+        "role": "symbolic_section"
+      }
+    ],
+    "sources": [],
+    "falsification": null,
+    "boundary": "These phrases are not empirical cosmology, materials science, virology, or causal-mechanism claims.",
+    "empirical_status": "NON_EMPIRICAL"
+  },
+  "COSMO-D-011": {
+    "id": "COSMO-D-011",
+    "class": "SYMBOLIC",
+    "status": "PROJECT_DEFINED",
+    "statement": "The association of Spin(8) triality with HPV capsid branching or trimerization is a symbolic cross-domain association in the current repository.",
+    "provenance": [
+      {
+        "path": "cosmovirus.tex",
+        "anchor": "capsid",
+        "role": "historical_symbolic_mapping"
+      }
+    ],
+    "sources": [],
+    "falsification": null,
+    "boundary": "The repository does not claim an established biological mechanism connecting Spin(8) triality to HPV capsid assembly.",
+    "empirical_status": "NON_EMPIRICAL"
+  },
+  "COSMO-D-012": {
+    "id": "COSMO-D-012",
+    "class": "HYPOTHESIS",
+    "status": "PROPOSED",
+    "statement": "A future quantitatively specified mapping from triality-derived features to an HPV/capsid observable could be tested for predictive value against matched controls.",
+    "provenance": [
+      {
+        "path": "CLAIM-LEDGER.md",
+        "anchor": "COSMO-D-012",
+        "role": "hypothesis_definition"
+      }
+    ],
+    "sources": [],
+    "falsification": {
+      "protocol": "Pre-register the triality-derived mapping, target observable, dataset split, evaluation metric, matched baselines, and decision threshold before evaluating held-out data.",
+      "rejection_condition": "Reject the hypothesis if held-out performance fails the predeclared threshold or is not distinguishable from the matched control baselines.",
+      "controls": [
+        "Matched baseline models fixed before held-out evaluation",
+        "Held-out data excluded from mapping and threshold selection"
+      ]
+    },
+    "boundary": "No such predictive result is currently claimed."
+  },
+  "COSMO-D-013": {
+    "id": "COSMO-D-013",
+    "class": "SYMBOLIC",
+    "status": "PROJECT_DEFINED",
+    "statement": "The use of SiS2Substrate as a COSMO state name is symbolic project vocabulary rather than evidence that silicon disulfide is a biological life-code substrate.",
+    "provenance": [
+      {
+        "path": "cosmovirus.lean",
+        "anchor": "SiS2Substrate",
+        "role": "state_label"
+      }
+    ],
+    "sources": [
+      "SRC-SIS2-PMID-25590815"
+    ],
+    "falsification": null,
+    "boundary": "The scientific source does not establish a biological substrate role; it supports SiS2 crystal-structure facts only.",
+    "empirical_status": "NON_EMPIRICAL"
+  },
+  "COSMO-D-014": {
+    "id": "COSMO-D-014",
+    "class": "COMPUTATIONAL",
+    "status": "SUPPORTED",
+    "statement": "Within the documented SECDED capability, the Phase B5 software storage pipeline deterministically recovers the original TriadicLattice through bytes, ECC, ACGT, corruption, correction, bytes, and cube reconstruction.",
+    "provenance": [
+      {
+        "path": "cosmo_core/storage.py",
+        "anchor": "def recover_cube_storage",
+        "role": "implementation"
+      },
+      {
+        "path": "tests/test_phase_b5.py",
+        "anchor": "test_full_cube_recovers_one_bit_error_in_every_codeword",
+        "role": "regression"
+      }
+    ],
+    "sources": [],
+    "falsification": null,
+    "boundary": "This is a software codec result, not a laboratory DNA-storage or physical Rubik's Cube claim."
+  }
+}'''
+    ),
+)
+PINNED_REVIEWED_CLAIM_IDS = tuple(PINNED_REVIEWED_CLAIM_RECORDS)
+PINNED_FORMAL_PROVENANCE: dict[str, tuple[str, str]] = {
     "COSMO-D-001": (
-        "FORMAL",
-        "For every CosmoLayer, six applications of the authoritative Lean "
-        "transition return the layer to itself.",
+        "cosmovirus.lean",
+        "theorem six_step_periodic (layer : CosmoLayer) : "
+        "psiIterate 6 layer = layer := by",
     ),
     "COSMO-D-002": (
-        "FORMAL",
-        "Every authoritative COSMO layer reaches every other layer within one "
-        "complete six-state orbit.",
-    ),
-    "COSMO-D-003": (
-        "COMPUTATIONAL",
-        "The Phase B3 Python reference generator deterministically constructs "
-        "240 unique E8 roots with rank 8 and squared norm 2, and the canonical "
-        "table is bound to a reviewed SHA-256.",
-    ),
-    "COSMO-D-004": (
-        "SCIENTIFIC",
-        PINNED_REVIEWED_SCIENTIFIC_STATEMENTS["COSMO-D-004"],
-    ),
-    "COSMO-D-005": (
-        "SCIENTIFIC",
-        PINNED_REVIEWED_SCIENTIFIC_STATEMENTS["COSMO-D-005"],
-    ),
-    "COSMO-D-006": (
-        "SCIENTIFIC",
-        PINNED_REVIEWED_SCIENTIFIC_STATEMENTS["COSMO-D-006"],
-    ),
-    "COSMO-D-007": (
-        "SCIENTIFIC",
-        PINNED_REVIEWED_SCIENTIFIC_STATEMENTS["COSMO-D-007"],
-    ),
-    "COSMO-D-008": (
-        "SCIENTIFIC",
-        PINNED_REVIEWED_SCIENTIFIC_STATEMENTS["COSMO-D-008"],
-    ),
-    "COSMO-D-009": (
-        "SYMBOLIC",
-        "The byte-to-cuneiform labels in COSMO are project-defined symbolic "
-        "annotations.",
-    ),
-    "COSMO-D-010": (
-        "SYMBOLIC",
-        "COSMO's language of undivided cosmic symmetry, life-code substrate, "
-        "infected reality, and Ouroboros self-causation is symbolic/interpretive "
-        "vocabulary.",
-    ),
-    "COSMO-D-011": (
-        "SYMBOLIC",
-        "The association of Spin(8) triality with HPV capsid branching or "
-        "trimerization is a symbolic cross-domain association in the current "
-        "repository.",
-    ),
-    "COSMO-D-012": (
-        "HYPOTHESIS",
-        "A future quantitatively specified mapping from triality-derived "
-        "features to an HPV/capsid observable could be tested for predictive "
-        "value against matched controls.",
-    ),
-    "COSMO-D-013": (
-        "SYMBOLIC",
-        "The use of SiS2Substrate as a COSMO state name is symbolic project "
-        "vocabulary rather than evidence that silicon disulfide is a biological "
-        "life-code substrate.",
-    ),
-    "COSMO-D-014": (
-        "COMPUTATIONAL",
-        "Within the documented SECDED capability, the Phase B5 software storage "
-        "pipeline deterministically recovers the original TriadicLattice through "
-        "bytes, ECC, ACGT, corruption, correction, bytes, and cube reconstruction.",
+        "cosmovirus.lean",
+        "theorem every_layer_reachable (source target : CosmoLayer) : "
+        "ReachesWithinCycle source target := by",
     ),
 }
-PINNED_REVIEWED_CLAIM_IDS = tuple(PINNED_REVIEWED_CLAIM_DEFINITIONS)
 PINNED_REVIEWED_SOURCE_RECORDS: dict[str, tuple[str, str, str, str]] = {
     "SRC-E8-MATHWORLD": (
         "scholarly_reference",
@@ -343,7 +558,8 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"demonstrates?|demonstrated|establishes?|established|"
     r"validates?|validated|predicts?|predicted|induces?|induced|"
     r"triggers?|triggered|promotes?|promoted|mediates?|mediated|"
-    r"enables?|enabled|"
+    r"enables?|enabled|controls?|controlled|regulates?|regulated|"
+    r"modulates?|modulated|governs?|governed|influences?|influenced|"
     r"leads?\s+to|results?\s+in|gives?\s+rise\s+to|"
     r"contributes?\s+to|corresponds?\s+to|maps?\s+to|"
     r"is\s+(?:an?\s+|the\s+)?mechanism\s+(?:for|of|behind)|"
@@ -817,6 +1033,11 @@ def validate_formal_provenance_target(
     text: str,
 ) -> None:
     """Bind FORMAL evidence to an exact theorem in the protected Lean closure."""
+    expected = PINNED_FORMAL_PROVENANCE.get(claim_id)
+    if expected is not None and (path_text, anchor) != expected:
+        fail(
+            f"{claim_id} FORMAL provenance does not match its reviewed theorem"
+        )
     if not path_text.endswith(".lean"):
         fail(f"{claim_id} FORMAL provenance must point to a .lean source file")
     if path_text not in protected_lean_sources():
@@ -1078,6 +1299,38 @@ def _static_boolean_value(
     return None
 
 
+def _static_iterable_has_items(expression: ast.expr) -> bool | None:
+    """Resolve obviously empty/non-empty literal iterables used by for-loops."""
+    if isinstance(expression, (ast.List, ast.Tuple, ast.Set)):
+        return bool(expression.elts)
+    if isinstance(expression, ast.Dict):
+        return bool(expression.keys)
+    if isinstance(expression, ast.Constant) and isinstance(
+        expression.value,
+        (str, bytes),
+    ):
+        return bool(expression.value)
+    if (
+        isinstance(expression, ast.Call)
+        and isinstance(expression.func, ast.Name)
+        and expression.func.id == "range"
+        and not expression.keywords
+        and 1 <= len(expression.args) <= 3
+        and all(
+            isinstance(arg, ast.Constant)
+            and isinstance(arg.value, int)
+            and not isinstance(arg.value, bool)
+            for arg in expression.args
+        )
+    ):
+        integer_args = [
+            cast(int, cast(ast.Constant, arg).value)
+            for arg in expression.args
+        ]
+        return bool(range(*integer_args))
+    return None
+
+
 def _reachable_statements_call_function(
     statements: list[ast.stmt],
     function_name: str,
@@ -1113,6 +1366,57 @@ def _reachable_statements_call_function(
                     module_constants,
                 ):
                     return True
+            continue
+
+        if isinstance(statement, ast.While):
+            condition = _static_boolean_value(
+                statement.test,
+                module_constants,
+            )
+            if condition is False:
+                if _reachable_statements_call_function(
+                    statement.orelse,
+                    function_name,
+                    module_constants,
+                ):
+                    return True
+                continue
+            if _reachable_statements_call_function(
+                statement.body,
+                function_name,
+                module_constants,
+            ):
+                return True
+            if condition is None and _reachable_statements_call_function(
+                statement.orelse,
+                function_name,
+                module_constants,
+            ):
+                return True
+            continue
+
+        if isinstance(statement, (ast.For, ast.AsyncFor)):
+            has_items = _static_iterable_has_items(statement.iter)
+            if has_items is False:
+                if _reachable_statements_call_function(
+                    statement.orelse,
+                    function_name,
+                    module_constants,
+                ):
+                    return True
+                continue
+            if _reachable_statements_call_function(
+                statement.body,
+                function_name,
+                module_constants,
+            ):
+                return True
+            if _reachable_statements_call_function(
+                statement.orelse,
+                function_name,
+                module_constants,
+            ):
+                return True
             continue
 
         if _statement_calls_function(statement, function_name):
@@ -1655,7 +1959,7 @@ def public_entities(text: str) -> set[str]:
 
 
 def public_claim_semantics() -> dict[str, tuple[set[str], set[str]]]:
-    """Build semantic signatures from canonical claim statements/boundaries."""
+    """Build semantic signatures from reviewed claim records when available."""
     ledger = load_json()
     raw_claims = ledger.get("claims")
     if not isinstance(raw_claims, list):
@@ -1666,12 +1970,13 @@ def public_claim_semantics() -> dict[str, tuple[set[str], set[str]]]:
         if not isinstance(claim, dict):
             fail("claim entries must be objects")
         claim_id = require_inline_string(claim.get("id"), "claim id")
+        semantic_claim = PINNED_REVIEWED_CLAIM_RECORDS.get(claim_id, claim)
         statement = require_inline_string(
-            claim.get("statement"),
+            semantic_claim.get("statement"),
             f"{claim_id} statement",
         )
         boundary = require_inline_string(
-            claim.get("boundary"),
+            semantic_claim.get("boundary"),
             f"{claim_id} boundary",
         )
         combined = statement + " " + boundary
@@ -1806,6 +2111,11 @@ def strip_markdown_link_destinations(text: str) -> str:
 
 def normalize_markdown_visible_text(text: str) -> str:
     """Approximate rendered Markdown text for semantic matching."""
+    text = re.sub(
+        r"</?[A-Za-z][A-Za-z0-9-]*(?:\s+[^<>]*?)?\s*/?>",
+        "",
+        text,
+    )
     text = re.sub(
         r"\\([\\`*_{}\[\]()#+\-.!|>~])",
         r"\1",
@@ -1990,19 +2300,16 @@ def validate_reviewed_scientific_statement(
         )
 
 
-def validate_reviewed_claim_definition(
+def validate_reviewed_claim_record(
     claim_id: str,
-    evidence_class: str,
-    statement: str,
+    claim: dict[str, Any],
 ) -> None:
-    """Prevent a reviewed ID from being silently repurposed."""
-    expected = PINNED_REVIEWED_CLAIM_DEFINITIONS.get(claim_id)
+    """Prevent any field of a reviewed Phase D claim from silently drifting."""
+    expected = PINNED_REVIEWED_CLAIM_RECORDS.get(claim_id)
     if expected is None:
         return
-    if (evidence_class, statement) != expected:
-        fail(
-            f"{claim_id} class/statement differs from its reviewed definition"
-        )
+    if claim != expected:
+        fail(f"{claim_id} differs from its complete reviewed claim record")
 
 
 def validate_reviewed_claim_inventory(claim_ids: set[str]) -> None:
@@ -2144,6 +2451,7 @@ def validate() -> None:
         if claim_id in claim_ids:
             fail(f"duplicate claim id {claim_id}")
         claim_ids.add(claim_id)
+        validate_reviewed_claim_record(claim_id, claim)
 
         evidence_class = require_inline_string(
             claim.get("class"),
@@ -2166,11 +2474,6 @@ def validate() -> None:
         statement = require_inline_string(
             claim.get("statement"),
             f"{claim_id} statement",
-        )
-        validate_reviewed_claim_definition(
-            claim_id,
-            evidence_class,
-            statement,
         )
         require_inline_string(
             claim.get("boundary"),
