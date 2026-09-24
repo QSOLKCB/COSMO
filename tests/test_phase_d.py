@@ -3,6 +3,7 @@ import runpy
 from copy import deepcopy
 import subprocess
 import sys
+import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
@@ -138,6 +139,21 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         )
         with self.assertRaises(SystemExit):
             parse_json_text(ambiguous)
+
+    def test_nonstandard_json_constants_are_rejected(self) -> None:
+        namespace = self.load_validator_namespace()
+        parse_json_text = cast(
+            Callable[[str], dict[str, Any]],
+            namespace["parse_json_text"],
+        )
+        for constant in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(constant=constant):
+                with self.assertRaises(SystemExit):
+                    parse_json_text(
+                        '{"schema":"COSMO-CLAIMS-D-1","extension":'
+                        + constant
+                        + "}"
+                    )
 
     def test_markdown_rendered_fields_must_be_single_line(self) -> None:
         namespace = self.load_validator_namespace()
@@ -346,9 +362,55 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                     validate_formal_target(
                         "COSMO-D-999",
                         "CosmoFormal.lean",
-                        "theorem six_step_periodic",
+                        (
+                            "theorem six_step_periodic (layer : CosmoLayer) : "
+                            "psiIterate 6 layer = layer := by"
+                        ),
                         source,
                     )
+
+    def test_formal_target_must_enter_protected_lean_compile_closure(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_formal_target = cast(
+            Callable[[str, str, str, str], None],
+            namespace["validate_formal_provenance_target"],
+        )
+        anchor = (
+            "theorem six_step_periodic (layer : CosmoLayer) : "
+            "psiIterate 6 layer = layer := by"
+        )
+        with self.assertRaises(SystemExit):
+            validate_formal_target(
+                "COSMO-D-001",
+                "UncompiledEvidence.lean",
+                anchor,
+                anchor + "\n  trivial\n",
+            )
+
+    def test_computational_regression_must_execute_without_skip(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_regression = cast(
+            Callable[[str, str, str, Path, str], None],
+            namespace["validate_computational_regression_target"],
+        )
+        source = (
+            "import unittest\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    @unittest.skip('temporarily disabled')\n"
+            "    def test_required_regression(self):\n"
+            "        self.assertTrue(True)\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "test_regression.py"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                validate_regression(
+                    "COSMO-D-999",
+                    "tests/test_regression.py",
+                    "test_required_regression",
+                    path,
+                    source,
+                )
 
     def test_scientific_claim_rejects_unrelated_domain_source(self) -> None:
         namespace = self.load_validator_namespace()
@@ -374,8 +436,9 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             Callable[[str, str, set[str]], None],
             namespace["validate_public_claim_text"],
         )
-        claim_ids = {
-            claim["id"] for claim in self.load_ledger()["claims"]
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
         }
         unsupported = (
             "Spin(8) triality biologically causes HPV16 capsid assembly."
@@ -384,8 +447,26 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             validate_public_claim_text(
                 "README.md",
                 unsupported,
-                claim_ids,
+                claim_classes,
             )
+
+        for misbound in (
+            (
+                "COSMO-D-004 documents Spin(8) triality. "
+                "Spin(8) triality causes HPV16 capsid assembly."
+            ),
+            (
+                "COSMO-D-004 records that Spin(8) triality causes HPV16 "
+                "capsid assembly."
+            ),
+        ):
+            with self.subTest(misbound=misbound):
+                with self.assertRaises(SystemExit):
+                    validate_public_claim_text(
+                        "README.md",
+                        misbound,
+                        claim_classes,
+                    )
 
         governed = (
             "COSMO-D-011 records that Spin(8) triality causes HPV16 "
@@ -394,7 +475,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         validate_public_claim_text(
             "README.md",
             governed,
-            claim_ids,
+            claim_classes,
         )
 
     def test_public_negation_only_suppresses_its_own_assertion(self) -> None:
@@ -403,8 +484,9 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             Callable[[str, str, set[str]], None],
             namespace["validate_public_claim_text"],
         )
-        claim_ids = {
-            claim["id"] for claim in self.load_ledger()["claims"]
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
         }
 
         for unsupported in (
@@ -416,19 +498,23 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "Spin(8) does not describe normal virology, but "
                 "Spin(8) triality causes HPV16 capsid assembly."
             ),
+            (
+                "Although Spin(8) is not biological, Spin(8) triality "
+                "causes HPV16 capsid assembly."
+            ),
         ):
             with self.subTest(text=unsupported):
                 with self.assertRaises(SystemExit):
                     validate_public_claim_text(
                         "README.md",
                         unsupported,
-                        claim_ids,
+                        claim_classes,
                     )
 
         validate_public_claim_text(
             "README.md",
             "Spin(8) triality does not cause HPV16 capsid assembly.",
-            claim_ids,
+            claim_classes,
         )
 
         validate_public_claim_text(
@@ -438,7 +524,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "HPV16 capsid assembly is biological context. "
                 "PR A proves a local integer result."
             ),
-            claim_ids,
+            claim_classes,
         )
 
     def test_hpv16_reference_accession_is_versioned(self) -> None:
