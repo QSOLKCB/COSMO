@@ -432,6 +432,26 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 anchor + "\n  trivial\n",
             )
 
+    def test_protected_lean_sources_come_from_executed_inventory(self) -> None:
+        namespace = self.load_validator_namespace()
+        protected_sources = cast(
+            Callable[[], set[str]],
+            namespace["protected_lean_sources"],
+        )
+        self.assertEqual(
+            protected_sources(),
+            {"CosmoTrust.lean", "cosmovirus.lean", "COSMO.lean"},
+        )
+
+        script = (
+            REPOSITORY_ROOT / "scripts" / "run-lean-verified-reuse-ci.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(
+            "UncompiledEvidence.lean",
+            "\n".join(sorted(protected_sources())),
+        )
+        self.assertIn("PROJECT_LEAN_SOURCES=(", script)
+
     def test_computational_regression_must_execute_without_skip(self) -> None:
         namespace = self.load_validator_namespace()
         validate_regression = cast(
@@ -481,6 +501,59 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                     source,
                 )
 
+    def test_generator_regression_methods_are_rejected(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_regression = cast(
+            Callable[[str, str, str, Path, str], None],
+            namespace["validate_computational_regression_target"],
+        )
+        source = (
+            "import unittest\n"
+            "from collections.abc import Iterator\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> Iterator[None]:\n"
+            "        yield None\n"
+            "        self.fail('generator body executed')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "test_regression.py"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                validate_regression(
+                    "COSMO-D-999",
+                    "tests/test_regression.py",
+                    "test_required_regression",
+                    path,
+                    source,
+                )
+
+    def test_regression_must_exercise_declared_implementation(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b3.py"
+        ).read_text(encoding="utf-8")
+        validate_connection(
+            "COSMO-D-003",
+            "cosmo_core/e8.py",
+            "def validate_e8_root_system",
+            "tests/test_phase_b3.py",
+            "test_root_system_report_has_rank_eight_and_norm_two",
+            regression_text,
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/fake_evidence.py",
+                "def validate_e8_root_system",
+                "tests/test_phase_b3.py",
+                "test_root_system_report_has_rank_eight_and_norm_two",
+                regression_text,
+            )
+
     def test_implementation_provenance_requires_executable_project_source(self) -> None:
         namespace = self.load_validator_namespace()
         validate_implementation = cast(
@@ -512,6 +585,39 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 {"SRC-E8-MATHWORLD": "scholarly_reference"},
                 {"SRC-E8-MATHWORLD": "mathematics"},
             )
+
+    def test_scientific_claim_requires_its_reviewed_source(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_scientific_sources = cast(
+            Callable[
+                [str, str, list[str], dict[str, str], dict[str, str]],
+                None,
+            ],
+            namespace["validate_scientific_sources"],
+        )
+        source_kinds = {
+            "SRC-HPV16-REFSEQ": "official_database",
+            "SRC-HPV-P16-PMC8409095": "peer_reviewed_review",
+        }
+        source_domains = {
+            "SRC-HPV16-REFSEQ": "biomedicine",
+            "SRC-HPV-P16-PMC8409095": "biomedicine",
+        }
+        with self.assertRaises(SystemExit):
+            validate_scientific_sources(
+                "COSMO-D-006",
+                "biomedicine",
+                ["SRC-HPV-P16-PMC8409095"],
+                source_kinds,
+                source_domains,
+            )
+        validate_scientific_sources(
+            "COSMO-D-006",
+            "biomedicine",
+            ["SRC-HPV16-REFSEQ"],
+            source_kinds,
+            source_domains,
+        )
 
     def test_d004_provenance_anchor_is_claim_specific(self) -> None:
         ledger = self.load_ledger()
@@ -594,6 +700,33 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             governed,
             claim_classes,
         )
+
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                (
+                    "COSMO-D-009: Spin(8) triality causes "
+                    "HPV16 capsid assembly."
+                ),
+                claim_classes,
+            )
+
+    def test_public_claim_guard_scans_markdown_table_cells(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                (
+                    "| Claim | Status |\n"
+                    "| --- | --- |\n"
+                    "| Spin(8) triality causes HPV16 capsid assembly. | open |\n"
+                ),
+                {},
+            )
 
     def test_public_negation_only_suppresses_its_own_assertion(self) -> None:
         namespace = self.load_validator_namespace()
@@ -775,10 +908,20 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "Spin(8) triality causes HPV16 capsid assembly.\n",
                 encoding="utf-8",
             )
+            audit = root / "audit"
+            audit.mkdir()
+            (audit / "AUDIT-RESOLUTION.md").write_text(
+                "Spin(8) triality causes HPV16 capsid assembly.\n",
+                encoding="utf-8",
+            )
             (root / "notes.txt").write_text("not public\n", encoding="utf-8")
             self.assertEqual(
                 discover_paths(root),
-                ("NEW_PUBLIC.md", "README.md"),
+                (
+                    "NEW_PUBLIC.md",
+                    "README.md",
+                    "audit/AUDIT-RESOLUTION.md",
+                ),
             )
 
     def test_hpv16_reference_accession_is_versioned(self) -> None:
