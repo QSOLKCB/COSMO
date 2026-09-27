@@ -5361,9 +5361,15 @@ def expand_latex_user_macros(
         changed = False
         for macro, (argument_count, body) in macros.items():
             if argument_count == 0:
+                def replace_zero_argument_macro(
+                    _match: re.Match[str],
+                    replacement: str = body,
+                ) -> str:
+                    return replacement
+
                 updated = re.sub(
                     re.escape(macro) + r"(?![A-Za-z@])",
-                    lambda _match, replacement=body: replacement,
+                    replace_zero_argument_macro,
                     rendered,
                 )
             else:
