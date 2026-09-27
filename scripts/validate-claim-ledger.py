@@ -11,6 +11,7 @@ import json
 import re
 import runpy
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from typing import Any, Never, cast
@@ -595,6 +596,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"triggers?|triggered|promotes?|promoted|mediates?|mediated|"
     r"enables?|enabled|activates?|activated|"
     r"inhibits?|inhibited|inhibiting|"
+    r"prevents?|prevented|preventing|"
     r"(?:makes?|made)(?=\s+[^.!?;,]{0,80}\bhappen(?:s|ed|ing)?\b)|"
     r"controls?\s+(?=(?:(?:the|an?|this|that)\s+)?"
     r"(?:(?:[A-Za-z][A-Za-z0-9_-]*|of)\s+){0,5}"
@@ -1343,7 +1345,9 @@ def function_contains_yield(node: ast.FunctionDef) -> bool:
     return finder.found
 
 
-UNITTEST_DISPATCH_HOOKS = frozenset({"run", "_callTestMethod"})
+UNITTEST_DISPATCH_HOOKS = frozenset(
+    {"run", "_callTestMethod", "__getattribute__", "__getattr__"}
+)
 
 
 def _is_unittest_testcase_expression(node: ast.expr) -> bool:
@@ -2904,14 +2908,185 @@ def _reachable_assert_equal_pairs(
     return observed
 
 
+def _statement_assigns_call_result(
+    statement: ast.stmt,
+    target_name: str,
+    function_name: str,
+) -> bool:
+    value: ast.expr | None = None
+    target: ast.expr | None = None
+    if (
+        isinstance(statement, ast.Assign)
+        and len(statement.targets) == 1
+    ):
+        target = statement.targets[0]
+        value = statement.value
+    elif isinstance(statement, ast.AnnAssign):
+        target = statement.target
+        value = statement.value
+
+    return (
+        isinstance(target, ast.Name)
+        and target.id == target_name
+        and isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id == function_name
+    )
+
+
+def _reachable_assignment_from_call(
+    statements: list[ast.stmt],
+    target_name: str,
+    function_name: str,
+    module_constants: dict[str, bool],
+) -> bool:
+    for statement in statements:
+        if isinstance(statement, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+            return False
+        if _statement_assigns_call_result(
+            statement,
+            target_name,
+            function_name,
+        ):
+            return True
+
+        if isinstance(statement, ast.If):
+            condition = _static_boolean_value(statement.test, module_constants)
+            branches = (
+                [statement.body] if condition is True
+                else [statement.orelse] if condition is False
+                else [statement.body, statement.orelse]
+            )
+            if any(
+                _reachable_assignment_from_call(
+                    branch,
+                    target_name,
+                    function_name,
+                    module_constants,
+                )
+                for branch in branches
+            ):
+                return True
+            continue
+
+        if isinstance(statement, ast.While):
+            condition = _static_boolean_value(statement.test, module_constants)
+            if condition is not False and _reachable_assignment_from_call(
+                statement.body,
+                target_name,
+                function_name,
+                module_constants,
+            ):
+                return True
+            if condition is not True and _reachable_assignment_from_call(
+                statement.orelse,
+                target_name,
+                function_name,
+                module_constants,
+            ):
+                return True
+            continue
+
+        if isinstance(statement, (ast.For, ast.AsyncFor)):
+            if (
+                _static_iterable_has_items(statement.iter) is not False
+                and _reachable_assignment_from_call(
+                    statement.body,
+                    target_name,
+                    function_name,
+                    module_constants,
+                )
+            ):
+                return True
+            if _reachable_assignment_from_call(
+                statement.orelse,
+                target_name,
+                function_name,
+                module_constants,
+            ):
+                return True
+            continue
+
+        if isinstance(statement, ast.Match):
+            subject_known, subject_value = _static_literal_value(
+                statement.subject
+            )
+            for case in statement.cases:
+                pattern_match = (
+                    _static_match_pattern_matches(case.pattern, subject_value)
+                    if subject_known
+                    else None
+                )
+                if pattern_match is False:
+                    continue
+                guard_value = (
+                    _static_boolean_value(case.guard, module_constants)
+                    if case.guard is not None
+                    else True
+                )
+                if guard_value is False:
+                    continue
+                if _reachable_assignment_from_call(
+                    case.body,
+                    target_name,
+                    function_name,
+                    module_constants,
+                ):
+                    return True
+                if pattern_match is True and guard_value is True:
+                    break
+            continue
+
+        if isinstance(statement, (ast.With, ast.AsyncWith)):
+            if _reachable_assignment_from_call(
+                statement.body,
+                target_name,
+                function_name,
+                module_constants,
+            ):
+                return True
+            continue
+
+        if isinstance(statement, ast.Try):
+            groups = [
+                statement.body,
+                statement.orelse,
+                statement.finalbody,
+                *[handler.body for handler in statement.handlers],
+            ]
+            if any(
+                _reachable_assignment_from_call(
+                    group,
+                    target_name,
+                    function_name,
+                    module_constants,
+                )
+                for group in groups
+            ):
+                return True
+    return False
+
+
 def validate_reviewed_computational_regression_semantics(
     claim_id: str,
     method: ast.FunctionDef,
     module_constants: dict[str, bool],
+    imported_binding: str,
 ) -> None:
     """Require reviewed result assertions for claim-specific computational evidence."""
     if claim_id != "COSMO-D-014":
         return
+
+    if not _reachable_assignment_from_call(
+        method.body,
+        "recovered",
+        imported_binding,
+        module_constants,
+    ):
+        fail(
+            f"{claim_id} regression must bind recovered to the reviewed "
+            f"implementation return value {imported_binding}(...)"
+        )
 
     required_pairs = {
         frozenset({"recovered.cube", "cube"}),
@@ -3026,6 +3201,7 @@ def validate_computational_evidence_connection(
         claim_id,
         method,
         module_constants,
+        imported_binding,
     )
 
 
@@ -3112,55 +3288,89 @@ def validate_computational_regression_target(
         anchor,
         text,
     )
-    namespace: dict[str, Any] = {
-        "__name__": f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
-        "__file__": str(path),
-        "__package__": None,
-        "__cached__": None,
-    }
-    try:
-        code = compile(text, str(path), "exec")
-        exec(code, namespace)
-    except SystemExit as exc:
-        fail(
-            f"{claim_id} cannot load regression evidence {path_text}: "
-            f"SystemExit({exc.code!r})"
-        )
-    except Exception as exc:
-        fail(
-            f"{claim_id} cannot load regression evidence {path_text}: "
-            f"{type(exc).__name__}: {exc}"
-        )
+    runner = r'''
+import sys
+import unittest
 
-    case_type = namespace.get(class_name)
-    if not isinstance(case_type, type) or not issubclass(case_type, unittest.TestCase):
-        fail(
-            f"{claim_id} regression class {class_name!r} is not a unittest.TestCase"
-        )
-    case = case_type(anchor)
-    result = unittest.TestResult()
-    case.run(result)
+source = sys.stdin.read()
+class_name, anchor, filename, run_name = sys.argv[1:5]
+namespace = {
+    "__name__": run_name,
+    "__file__": filename,
+    "__package__": None,
+    "__cached__": None,
+}
+try:
+    code = compile(source, filename, "exec")
+    exec(code, namespace)
+except BaseException as exc:
+    print(f"load failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+    raise SystemExit(20)
 
-    if result.testsRun != 1:
-        fail(
-            f"{claim_id} regression evidence {path_text}:{anchor} did not "
-            "execute exactly once"
+case_type = namespace.get(class_name)
+if not isinstance(case_type, type) or not issubclass(case_type, unittest.TestCase):
+    print("claimed class is not unittest.TestCase", file=sys.stderr)
+    raise SystemExit(21)
+
+case = case_type(anchor)
+result = unittest.TestResult()
+unittest.TestCase.run(case, result)
+
+if result.testsRun != 1:
+    print(f"testsRun={result.testsRun}", file=sys.stderr)
+    raise SystemExit(22)
+if result.skipped:
+    print("regression skipped", file=sys.stderr)
+    raise SystemExit(23)
+if result.expectedFailures:
+    print("regression expected failure", file=sys.stderr)
+    raise SystemExit(24)
+if result.failures or result.errors or result.unexpectedSuccesses:
+    details = result.failures + result.errors
+    rendered = details[0][1].splitlines()[-1] if details else "unexpected success"
+    print(rendered, file=sys.stderr)
+    raise SystemExit(25)
+
+print("__COSMO_REGRESSION_OK__")
+'''
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            runner,
+            class_name,
+            anchor,
+            str(path),
+            f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
+        ],
+        cwd=ROOT,
+        input=text,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    output_lines = [
+        line.strip()
+        for line in completed.stdout.splitlines()
+        if line.strip()
+    ]
+    if (
+        completed.returncode != 0
+        or not output_lines
+        or output_lines[-1] != "__COSMO_REGRESSION_OK__"
+    ):
+        detail_lines = [
+            line.strip()
+            for line in completed.stderr.splitlines()
+            if line.strip()
+        ]
+        detail = detail_lines[-1] if detail_lines else (
+            f"subprocess exit {completed.returncode}"
         )
-    if result.skipped:
         fail(
-            f"{claim_id} regression evidence {path_text}:{anchor} is skipped"
-        )
-    if result.expectedFailures:
-        fail(
-            f"{claim_id} regression evidence {path_text}:{anchor} is marked "
-            "as an expected failure"
-        )
-    if result.failures or result.errors or result.unexpectedSuccesses:
-        details = result.failures + result.errors
-        rendered = details[0][1].splitlines()[-1] if details else "unexpected success"
-        fail(
-            f"{claim_id} regression evidence {path_text}:{anchor} did not pass: "
-            f"{rendered}"
+            f"{claim_id} regression evidence {path_text}:{anchor} did not pass "
+            f"in isolated execution: {detail}"
         )
 
 
@@ -4011,6 +4221,11 @@ def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
             "\n\n",
             text,
         )
+        text = re.sub(
+            r"\\\\(?:\s*\[[^\]\n]*\])?",
+            "\n\n",
+            text,
+        )
     if suffix in {".md", ".markdown"}:
         text = re.sub(
             r"(?m)^ {0,3}>[ \t]*$",
@@ -4109,12 +4324,14 @@ def strip_latex_disabled_branches(text: str) -> str:
     return "".join(parts)
 
 
-def latex_zero_arg_macro_definitions(text: str) -> dict[str, str]:
-    """Extract simple zero-argument user-defined macros and their rendered bodies."""
+def latex_user_macro_definitions(
+    text: str,
+) -> dict[str, tuple[int, str]]:
+    """Extract simple zero/one-argument user macros and rendered bodies."""
     command_re = re.compile(
         r"\\(?:newcommand|renewcommand|providecommand)\*?"
     )
-    macros: dict[str, str] = {}
+    macros: dict[str, tuple[int, str]] = {}
     cursor = 0
 
     def skip_space(index: int) -> int:
@@ -4171,37 +4388,71 @@ def latex_zero_arg_macro_definitions(text: str) -> dict[str, str]:
             cursor = match.end()
             continue
 
-        # Parameterized macros require argument substitution and are intentionally
-        # not expanded by this renderer approximation.
+        argument_count = 0
         if index < len(text) and text[index] == "[":
-            cursor = match.end()
-            continue
+            bracket_end = text.find("]", index + 1)
+            if bracket_end == -1:
+                cursor = match.end()
+                continue
+            raw_count = text[index + 1:bracket_end].strip()
+            if raw_count != "1":
+                cursor = match.end()
+                continue
+            argument_count = 1
+            index = skip_space(bracket_end + 1)
+            if index < len(text) and text[index] == "[":
+                cursor = match.end()
+                continue
 
         body_end = braced_end(index)
         if body_end is None:
             cursor = match.end()
             continue
         if macro_name is not None:
-            macros[macro_name] = text[index + 1:body_end - 1]
+            macros[macro_name] = (
+                argument_count,
+                text[index + 1:body_end - 1],
+            )
         cursor = body_end
 
     return macros
 
 
-def expand_latex_zero_arg_macros(text: str, macros: dict[str, str]) -> str:
-    """Expand visible invocations of reviewed zero-argument user macros."""
+def expand_latex_user_macros(
+    text: str,
+    macros: dict[str, tuple[int, str]],
+) -> str:
+    """Expand visible zero/one-argument user macro invocations."""
     rendered = text
     for _ in range(max(1, len(macros) + 1)):
         changed = False
-        for macro, body in macros.items():
-            def replace_macro(_match: re.Match[str], replacement: str = body) -> str:
-                return replacement
+        for macro, (argument_count, body) in macros.items():
+            if argument_count == 0:
+                def replace_zero(
+                    _match: re.Match[str],
+                    replacement: str = body,
+                ) -> str:
+                    return replacement
 
-            updated = re.sub(
-                re.escape(macro) + r"(?![A-Za-z@])",
-                replace_macro,
-                rendered,
-            )
+                updated = re.sub(
+                    re.escape(macro) + r"(?![A-Za-z@])",
+                    replace_zero,
+                    rendered,
+                )
+            else:
+                pattern = (
+                    re.escape(macro)
+                    + r"(?![A-Za-z@])\s*\{([^{}\n]*)\}"
+                )
+
+                def replace_one(
+                    match: re.Match[str],
+                    replacement: str = body,
+                ) -> str:
+                    return replacement.replace("#1", match.group(1))
+
+                updated = re.sub(pattern, replace_one, rendered)
+
             if updated != rendered:
                 changed = True
                 rendered = updated
@@ -4338,9 +4589,9 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
     if suffix != ".tex":
         return text
 
-    user_macros = latex_zero_arg_macro_definitions(text)
+    user_macros = latex_user_macro_definitions(text)
     text = strip_latex_macro_definitions(text)
-    text = expand_latex_zero_arg_macros(text, user_macros)
+    text = expand_latex_user_macros(text, user_macros)
     for macro, expansion in LATEX_PUBLIC_MACROS.items():
         text = re.sub(
             re.escape(macro) + r"(?![A-Za-z])",
