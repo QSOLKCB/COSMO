@@ -4051,7 +4051,7 @@ print(f"COSMO-RUN-END:{completion_nonce}", flush=True)
         )
 
 
-def snapshot_provenance_files(def snapshot_provenance_files(claims: list[object]) -> dict[str, str]:
+def snapshot_provenance_files(claims: list[object]) -> dict[str, str]:
     """Freeze every ledger provenance file before executable evidence runs."""
     snapshots: dict[str, str] = {}
     for claim_index, claim in enumerate(claims):
