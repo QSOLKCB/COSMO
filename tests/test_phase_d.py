@@ -5146,5 +5146,87 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             )
 
 
+    def test_markdown_provenance_preserves_escaped_emphasis_delimiters(
+        self,
+    ) -> None:
+        namespace = self.load_validator_namespace()
+        validate_provenance = cast(
+            Callable[
+                [str, str, object, dict[str, str] | None],
+                set[str],
+            ],
+            namespace["validate_provenance"],
+        )
+        claim = next(
+            item
+            for item in self.load_ledger()["claims"]
+            if item["id"] == "COSMO-D-009"
+        )
+        snapshots = {
+            "cosmovirus.lean": (
+                REPOSITORY_ROOT / "cosmovirus.lean"
+            ).read_text(encoding="utf-8"),
+            "KNOWN_LIMITATIONS.md": (
+                r"\*Cu*neiform strings are project-defined symbolic annotations"
+            ),
+        }
+        with self.assertRaisesRegex(SystemExit, "anchor"):
+            validate_provenance(
+                "COSMO-D-009",
+                "SYMBOLIC",
+                claim["provenance"],
+                snapshots,
+            )
+
+    def test_markdown_provenance_defs_is_visible_outside_svg(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_provenance = cast(
+            Callable[
+                [str, str, object, dict[str, str] | None],
+                set[str],
+            ],
+            namespace["validate_provenance"],
+        )
+        claim = next(
+            item
+            for item in self.load_ledger()["claims"]
+            if item["id"] == "COSMO-D-006"
+        )
+        validate_provenance(
+            "COSMO-D-006",
+            "SCIENTIFIC",
+            claim["provenance"],
+            {"CLAIM-LEDGER.md": "<defs>NC_001526.4</defs>"},
+        )
+
+    def test_markdown_provenance_css_comment_cannot_join_property_name(
+        self,
+    ) -> None:
+        namespace = self.load_validator_namespace()
+        validate_provenance = cast(
+            Callable[
+                [str, str, object, dict[str, str] | None],
+                set[str],
+            ],
+            namespace["validate_provenance"],
+        )
+        claim = next(
+            item
+            for item in self.load_ledger()["claims"]
+            if item["id"] == "COSMO-D-006"
+        )
+        validate_provenance(
+            "COSMO-D-006",
+            "SCIENTIFIC",
+            claim["provenance"],
+            {
+                "CLAIM-LEDGER.md": (
+                    '<span style="dis/**/play:none">'
+                    "NC_001526.4</span>"
+                )
+            },
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

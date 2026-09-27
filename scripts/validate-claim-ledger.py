@@ -5387,6 +5387,14 @@ class _VisibleHTMLTextParser(HTMLParser):
         if not self.parts or not self.parts[-1].endswith("\n\n"):
             self.parts.append("\n\n")
 
+    def _inside_svg_context(self) -> bool:
+        for tag, _hidden in reversed(self.open_tags):
+            if tag == "foreignobject":
+                return False
+            if tag == "svg":
+                return True
+        return False
+
     P_IMPLIED_END_STARTS = frozenset(
         {
             "address", "article", "aside", "blockquote", "div", "dl",
@@ -5486,7 +5494,7 @@ class _VisibleHTMLTextParser(HTMLParser):
         style_value = attribute_map.get("style") or ""
         style_value = re.sub(
             r"/\*[\s\S]*?\*/",
-            "",
+            " ",
             style_value,
         )
         css_hidden = re.search(
@@ -5500,7 +5508,10 @@ class _VisibleHTMLTextParser(HTMLParser):
             hidden_attribute
             or css_hidden
             or normalized == "template"
-            or normalized in self.NON_RENDERED_SVG_CONTAINERS
+            or (
+                normalized in self.NON_RENDERED_SVG_CONTAINERS
+                and self._inside_svg_context()
+            )
         )
 
         if normalized in self.VOID_TAGS:
@@ -5607,12 +5618,20 @@ def normalize_markdown_visible_text(text: str) -> str:
 def normalize_markdown_provenance_text(text: str) -> str:
     """Render Markdown formatting for exact provenance-anchor matching."""
     text = normalize_markdown_code_spans(text)
-    text = strip_inline_html_tags(text)
+
+    escaped_characters: list[str] = []
+
+    def protect_escape(match: re.Match[str]) -> str:
+        escaped_characters.append(match.group(1))
+        index = len(escaped_characters) - 1
+        return f"\ue000{index:x}\ue001"
+
     text = re.sub(
         r"\\([\\`*_{}\[\]()#+\-.!|>~])",
-        r"\1",
+        protect_escape,
         text,
     )
+    text = strip_inline_html_tags(text)
 
     paired_patterns = (
         re.compile(r"(?s)(\*\*|~~)(?=\S)(.+?)(?<=\S)\1"),
@@ -5627,9 +5646,13 @@ def normalize_markdown_provenance_text(text: str) -> str:
             text = pattern.sub(r"\2", text)
         if text == previous:
             break
+
+    for index, character in enumerate(escaped_characters):
+        text = text.replace(f"\ue000{index:x}\ue001", character)
     return text
 
 
+def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
 def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
     """Keep rendered block boundaries when binding claim IDs."""
     suffix = Path(path_text).suffix.lower()
