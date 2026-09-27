@@ -1556,7 +1556,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             "        )\n"
         )
         validate_connection(
-            "COSMO-D-003",
+            "COSMO-D-999",
             "cosmo_core/e8.py",
             "def validate_e8_root_system",
             "tests/test_regression.py",
@@ -1855,7 +1855,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             "            pass\n"
         )
         validate_connection(
-            "COSMO-D-003",
+            "COSMO-D-999",
             "cosmo_core/e8.py",
             "def validate_e8_root_system",
             "tests/test_regression.py",
