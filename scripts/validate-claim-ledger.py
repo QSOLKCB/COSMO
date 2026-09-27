@@ -362,6 +362,11 @@ PINNED_REVIEWED_CLAIM_RECORDS: dict[str, dict[str, Any]] = cast(
     ),
 )
 PINNED_REVIEWED_CLAIM_IDS = tuple(PINNED_REVIEWED_CLAIM_RECORDS)
+PINNED_FORMAL_AUTHORITY_IDENTIFIERS: dict[str, frozenset[str]] = {
+    "COSMO-D-001": frozenset({"CosmoLayer", "psiIterate"}),
+    "COSMO-D-002": frozenset({"CosmoLayer", "ReachesWithinCycle"}),
+}
+
 PINNED_FORMAL_PROVENANCE: dict[str, tuple[str, str]] = {
     "COSMO-D-001": (
         "cosmovirus.lean",
@@ -601,6 +606,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"leads?\s+to|results?\s+in|gives?\s+rise\s+to|"
     r"contributes?\s+to|corresponds?\s+to|maps?\s+to|"
     r"(?:is|are|was|were)\s+necessary\s+for|"
+    r"depend(?:s|ed|ing)?\s+on|"
     r"is\s+(?:an?\s+|the\s+)?mechanism\s+(?:for|of|behind)|"
     r"mechanism\s+(?:connects?|links?|drives?|causes?)|"
     r"is\s+responsible\s+for)\b",
@@ -1207,6 +1213,36 @@ def lean_exact_namespace_text(
     return "".join(rendered)
 
 
+def lean_namespace_variable_names(text: str) -> set[str]:
+    """Return names bound by direct namespace-level variable declarations."""
+    names: set[str] = set()
+    for line in text.splitlines():
+        match = re.match(r"^\s*variables?\s+(.+)$", line)
+        if match is None:
+            continue
+        payload = match.group(1).strip()
+
+        grouped = list(
+            re.finditer(
+                r"[({\[]\s*([^:(){}\[\]]+?)\s*:",
+                payload,
+            )
+        )
+        if grouped:
+            for binder in grouped:
+                for name in binder.group(1).split():
+                    if re.fullmatch(r"[^\s:(){}\[\]]+", name):
+                        names.add(name)
+            continue
+
+        bare = re.match(r"([^:]+?)\s*:", payload)
+        if bare is not None:
+            for name in bare.group(1).split():
+                if re.fullmatch(r"[^\s:(){}\[\]]+", name):
+                    names.add(name)
+    return names
+
+
 def validate_formal_provenance_target(
     claim_id: str,
     path_text: str,
@@ -1238,6 +1274,16 @@ def validate_formal_provenance_target(
         declaration_text,
         "Cosmovirus",
     )
+    shadowed = (
+        lean_namespace_variable_names(scoped_text)
+        & PINNED_FORMAL_AUTHORITY_IDENTIFIERS.get(claim_id, frozenset())
+    )
+    if shadowed:
+        fail(
+            f"{claim_id} FORMAL provenance shadows reviewed authoritative "
+            f"Lean identifiers {sorted(shadowed)}"
+        )
+
     normalized_source = normalize_lean_declaration(scoped_text)
     normalized_anchor = normalize_lean_declaration(anchor)
     if normalized_anchor not in normalized_source:
@@ -1827,6 +1873,37 @@ def _static_boolean_value(
     return None
 
 
+def _static_literal_value(expression: ast.expr) -> tuple[bool, object]:
+    if isinstance(expression, ast.Constant):
+        return True, expression.value
+    if (
+        isinstance(expression, ast.UnaryOp)
+        and isinstance(expression.operand, ast.Constant)
+        and isinstance(expression.operand.value, (int, float, complex))
+        and not isinstance(expression.operand.value, bool)
+    ):
+        value = expression.operand.value
+        if isinstance(expression.op, ast.USub):
+            return True, -value
+        if isinstance(expression.op, ast.UAdd):
+            return True, +value
+    return False, None
+
+
+def _static_match_pattern_matches(
+    pattern: ast.pattern,
+    subject: object,
+) -> bool | None:
+    if isinstance(pattern, ast.MatchValue):
+        known, value = _static_literal_value(pattern.value)
+        return subject == value if known else None
+    if isinstance(pattern, ast.MatchSingleton):
+        return subject is pattern.value
+    if isinstance(pattern, ast.MatchAs) and pattern.pattern is None:
+        return True
+    return None
+
+
 def _static_iterable_has_items(expression: ast.expr) -> bool | None:
     """Resolve obviously empty/non-empty literal iterables used by for-loops."""
     if isinstance(expression, (ast.List, ast.Tuple, ast.Set)):
@@ -2075,6 +2152,61 @@ def _reachable_statements_call_function(
                 module_constants,
             ):
                 return True
+            continue
+
+        if isinstance(statement, ast.Match):
+            if _expression_calls_function(
+                statement.subject,
+                function_name,
+                module_constants,
+            ):
+                return True
+
+            subject_known, subject_value = _static_literal_value(
+                statement.subject
+            )
+            selected_exit: str | None = None
+            for case in statement.cases:
+                pattern_match = (
+                    _static_match_pattern_matches(case.pattern, subject_value)
+                    if subject_known
+                    else None
+                )
+                if pattern_match is False:
+                    continue
+
+                if case.guard is not None:
+                    if _expression_calls_function(
+                        case.guard,
+                        function_name,
+                        module_constants,
+                    ):
+                        return True
+                    guard_value = _static_boolean_value(
+                        case.guard,
+                        module_constants,
+                    )
+                    if guard_value is False:
+                        continue
+                else:
+                    guard_value = True
+
+                if _reachable_statements_call_function(
+                    case.body,
+                    function_name,
+                    module_constants,
+                ):
+                    return True
+
+                if pattern_match is True and guard_value is True:
+                    selected_exit = _static_selected_exit_kind(
+                        case.body,
+                        module_constants,
+                    )
+                    break
+
+            if selected_exit is not None:
+                return False
             continue
 
         if isinstance(statement, ast.With):
@@ -2355,6 +2487,62 @@ def _method_mutates_binding(method: ast.FunctionDef, binding: str) -> bool:
     return False
 
 
+class _CalledNameFinder(ast.NodeVisitor):
+    """Collect direct named function calls without descending into nested code."""
+
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name):
+            self.names.add(node.func.id)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+
+def _called_names(method: ast.FunctionDef) -> set[str]:
+    finder = _CalledNameFinder()
+    for statement in method.body:
+        finder.visit(statement)
+    return finder.names
+
+
+def _called_helpers_mutate_binding(
+    regression_tree: ast.Module,
+    method: ast.FunctionDef,
+    binding: str,
+) -> bool:
+    """Follow called module helpers and reject reviewed-binding mutation."""
+    helpers = {
+        statement.name: statement
+        for statement in regression_tree.body
+        if isinstance(statement, ast.FunctionDef)
+    }
+    pending = list(_called_names(method) & set(helpers))
+    visited: set[str] = set()
+
+    while pending:
+        helper_name = pending.pop()
+        if helper_name in visited:
+            continue
+        visited.add(helper_name)
+        helper = helpers[helper_name]
+        if _method_mutates_binding(helper, binding):
+            return True
+        pending.extend(
+            (_called_names(helper) & set(helpers)) - visited
+        )
+    return False
+
+
 def _fixture_mutates_binding(
     regression_tree: ast.Module,
     class_name: str,
@@ -2451,6 +2639,16 @@ def validate_computational_evidence_connection(
         fail(
             f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
             f"rebinds or patches imported implementation binding {imported_binding}"
+        )
+    if _called_helpers_mutate_binding(
+        regression_tree,
+        method,
+        imported_binding,
+    ):
+        fail(
+            f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
+            f"calls a helper that rebinds or mutates imported implementation "
+            f"binding {imported_binding}"
         )
     if _fixture_mutates_binding(
         regression_tree,
@@ -3272,7 +3470,26 @@ class _VisibleHTMLTextParser(HTMLParser):
         attrs: list[tuple[str, str | None]],
     ) -> None:
         normalized = tag.lower()
-        hidden_here = any(name.lower() == "hidden" for name, _value in attrs)
+        hidden_attribute = any(
+            name.lower() == "hidden"
+            for name, _value in attrs
+        )
+        style_value = next(
+            (
+                value
+                for name, value in attrs
+                if name.lower() == "style" and value is not None
+            ),
+            "",
+        )
+        css_hidden = re.search(
+            r"(?:^|;)\s*(?:display\s*:\s*none|"
+            r"visibility\s*:\s*hidden)"
+            r"(?:\s*!important)?\s*(?:;|$)",
+            style_value,
+            re.IGNORECASE,
+        ) is not None
+        hidden_here = hidden_attribute or css_hidden
 
         if normalized in self.VOID_TAGS:
             if (
@@ -3535,6 +3752,13 @@ def strip_latex_macro_definitions(text: str) -> str:
 
 def normalize_latex_visible_text(text: str) -> str:
     """Approximate visible LaTeX prose for semantic matching."""
+    text = re.sub(
+        r"\\(?:part|chapter|section|subsection|subsubsection|"
+        r"paragraph|subparagraph)\*?"
+        r"(?:\s*\[[^\]\n]*\])?\s*\{([^{}\n]*)\}",
+        r"\n\n\1\n\n",
+        text,
+    )
     text = re.sub(
         r"\\(?:phantom|hphantom|vphantom)\s*\{[^{}\n]*\}",
         lambda match: _blank_non_newlines(match.group(0)),
