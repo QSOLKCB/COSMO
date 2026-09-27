@@ -590,6 +590,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"triggers?|triggered|promotes?|promoted|mediates?|mediated|"
     r"enables?|enabled|activates?|activated|"
     r"inhibits?|inhibited|inhibiting|"
+    r"(?:makes?|made)(?=\s+[^.!?;,]{0,80}\bhappen(?:s|ed|ing)?\b)|"
     r"controls?\s+(?=(?:(?:the|an?|this|that)\s+)?"
     r"(?:(?:[A-Za-z][A-Za-z0-9_-]*|of)\s+){0,5}"
     r"(?:HPV16|HPV|capsid|E6|E7|p16|SiS2|SiS_2|silicon\s+disulfide|"
@@ -1167,13 +1168,13 @@ def lean_exact_namespace_text(
     scopes: list[tuple[str, str | None]] = []
     rendered: list[str] = []
     namespace_re = re.compile(
-        r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_.']*)\s*$"
+        r"^\s*namespace\s+([^\s]+)\s*$"
     )
     section_re = re.compile(
-        r"^\s*section(?:\s+([A-Za-z_][A-Za-z0-9_.']*))?\s*$"
+        r"^\s*section(?:\s+([^\s]+))?\s*$"
     )
     end_re = re.compile(
-        r"^\s*end(?:\s+([A-Za-z_][A-Za-z0-9_.']*))?\s*$"
+        r"^\s*end(?:\s+([^\s]+))?\s*$"
     )
 
     for line in text.splitlines(keepends=True):
@@ -1274,6 +1275,84 @@ def function_contains_yield(node: ast.FunctionDef) -> bool:
     return finder.found
 
 
+UNITTEST_DISPATCH_HOOKS = frozenset({"run", "_callTestMethod"})
+
+
+def _is_unittest_testcase_expression(node: ast.expr) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "unittest"
+        and node.attr == "TestCase"
+    )
+
+
+class _UnittestDispatchMutationFinder(ast.NodeVisitor):
+    """Detect module-level mutation of unittest.TestCase dispatch hooks."""
+
+    def __init__(self) -> None:
+        self.found = False
+
+    def _target_is_dispatch_hook(self, target: ast.expr) -> bool:
+        return (
+            isinstance(target, ast.Attribute)
+            and target.attr in UNITTEST_DISPATCH_HOOKS
+            and _is_unittest_testcase_expression(target.value)
+        )
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id in {"setattr", "delattr"}
+            and len(node.args) >= 2
+            and _is_unittest_testcase_expression(node.args[0])
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in UNITTEST_DISPATCH_HOOKS
+        ):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if any(self._target_is_dispatch_hook(target) for target in node.targets):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if self._target_is_dispatch_hook(node.target):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        if self._target_is_dispatch_hook(node.target):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+
+def _module_mutates_unittest_dispatch(tree: ast.Module) -> bool:
+    finder = _UnittestDispatchMutationFinder()
+    for statement in tree.body:
+        finder.visit(statement)
+        if finder.found:
+            return True
+    return False
+
+
 def locate_unittest_regression(
     claim_id: str,
     path_text: str,
@@ -1291,6 +1370,12 @@ def locate_unittest_regression(
         tree = ast.parse(text, filename=path_text)
     except SyntaxError as exc:
         fail(f"{claim_id} regression source {path_text} is invalid Python: {exc}")
+
+    if _module_mutates_unittest_dispatch(tree):
+        fail(
+            f"{claim_id} regression source {path_text} mutates "
+            "unittest.TestCase dispatch at module scope"
+        )
 
     matches: list[tuple[str, ast.FunctionDef]] = []
     for node in tree.body:
@@ -1469,6 +1554,22 @@ def _module_mutates_binding_after_import(
     return False
 
 
+EAGER_GENERATOR_CONSUMERS = frozenset(
+    {
+        "all",
+        "any",
+        "frozenset",
+        "list",
+        "max",
+        "min",
+        "set",
+        "sorted",
+        "sum",
+        "tuple",
+    }
+)
+
+
 class _CallFinder(ast.NodeVisitor):
     """Find one target call without descending into nested functions."""
 
@@ -1484,6 +1585,25 @@ class _CallFinder(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         if isinstance(node.func, ast.Name) and node.func.id == self.function_name:
             self.found = True
+            return
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id in EAGER_GENERATOR_CONSUMERS
+        ):
+            for argument in node.args:
+                if isinstance(argument, ast.GeneratorExp):
+                    self._visit_comprehension(
+                        argument.generators,
+                        [argument.elt],
+                    )
+                else:
+                    self.visit(argument)
+                if self.found:
+                    return
+            for keyword in node.keywords:
+                self.visit(keyword.value)
+                if self.found:
+                    return
             return
         self.generic_visit(node)
 
@@ -1789,11 +1909,22 @@ def _assignment_target_is_obviously_safe(target: ast.expr) -> bool:
     return False
 
 
-def _statements_may_raise(statements: list[ast.stmt]) -> bool:
+def _statements_may_raise(
+    statements: list[ast.stmt],
+    module_constants: dict[str, bool],
+) -> bool:
     """Return false only for statement sequences that are trivially non-raising."""
     for statement in statements:
         if isinstance(statement, (ast.Pass, ast.Break, ast.Continue)):
             continue
+        if isinstance(statement, ast.Assert):
+            condition = _static_boolean_value(
+                statement.test,
+                module_constants,
+            )
+            if condition is True:
+                continue
+            return True
         if isinstance(statement, ast.Return):
             if _expression_is_obviously_nonraising(statement.value):
                 continue
@@ -1944,7 +2075,10 @@ def _reachable_statements_call_function(
             )
             if (
                 body_exit not in {"return", "break", "continue"}
-                and _statements_may_raise(statement.body)
+                and _statements_may_raise(
+                    statement.body,
+                    module_constants,
+                )
             ):
                 for handler in statement.handlers:
                     if _reachable_statements_call_function(
@@ -2013,6 +2147,15 @@ class _BindingMutationFinder(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         func = node.func
+        if (
+            isinstance(func, ast.Name)
+            and func.id in {"setattr", "delattr"}
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == self.binding
+        ):
+            self.found = True
+            return
         if (
             isinstance(func, ast.Attribute)
             and func.attr == "update"
@@ -3297,6 +3440,11 @@ def strip_latex_macro_definitions(text: str) -> str:
 
 def normalize_latex_visible_text(text: str) -> str:
     """Approximate visible LaTeX prose for semantic matching."""
+    text = re.sub(
+        r"\\(?:phantom|hphantom|vphantom)\s*\{[^{}\n]*\}",
+        lambda match: _blank_non_newlines(match.group(0)),
+        text,
+    )
     text = re.sub(
         r"\\href\s*\{[^{}\n]*\}\s*\{([^{}\n]*)\}",
         r"\1",
