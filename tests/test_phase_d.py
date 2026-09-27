@@ -1194,6 +1194,24 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 unconsumed_generator,
             )
 
+        expected_exception_only = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        with self.assertRaises(ValueError):\n"
+            "            validate_e8_root_system(())\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                expected_exception_only,
+            )
+
         eager_consumed_generator = (
             "import unittest\n"
             "from cosmo_core import canonical_e8_roots\n"
@@ -1232,6 +1250,27 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "tests/test_regression.py",
                 "test_required_regression",
                 unreachable_assert_handler,
+            )
+
+        qualified_mutated_function = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        object.__setattr__(\n"
+            "            validate_e8_root_system, '__code__',\n"
+            "            (lambda *_args: None).__code__,\n"
+            "        )\n"
+            "        validate_e8_root_system(())\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                qualified_mutated_function,
             )
 
         mutated_function_alias = (
@@ -1895,6 +1934,12 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             validate_public_claim_text(
                 "README.md",
                 "Spin(8) triality makes HPV16 capsid assembly happen.",
+                claim_classes,
+            )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                "Spin(8) triality is necessary for HPV16 capsid assembly.",
                 claim_classes,
             )
 
