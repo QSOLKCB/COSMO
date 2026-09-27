@@ -509,7 +509,7 @@ PLACEHOLDER_FILLER_TOKENS = frozenset(
         "value",
     }
 )
-PUBLIC_GOVERNED_SUFFIXES = frozenset({".md", ".markdown", ".tex"})
+PUBLIC_GOVERNED_SUFFIXES = frozenset({".md", ".markdown", ".tex", ".html", ".htm"})
 PUBLIC_DISCOVERY_EXCLUDED_PARTS = frozenset(
     {
         ".git",
@@ -605,7 +605,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"governs?|governed|influences?|influenced|"
     r"leads?\s+to|results?\s+in|gives?\s+rise\s+to|"
     r"contributes?\s+to|corresponds?\s+to|maps?\s+to|"
-    r"(?:is|are|was|were)\s+necessary\s+for|"
+    r"(?:is|are|was|were)\s+(?:necessary|essential)\s+for|"
     r"depend(?:s|ed|ing)?\s+on|"
     r"requir(?:e|es|ed|ing)|"
     r"is\s+(?:an?\s+|the\s+)?mechanism\s+(?:for|of|behind)|"
@@ -2675,6 +2675,57 @@ def _regression_calls_function(
     )
 
 
+def _simple_attribute_path(expression: ast.expr) -> str | None:
+    if isinstance(expression, ast.Name):
+        return expression.id
+    if isinstance(expression, ast.Attribute):
+        parent = _simple_attribute_path(expression.value)
+        if parent is not None:
+            return parent + "." + expression.attr
+    return None
+
+
+def validate_reviewed_computational_regression_semantics(
+    claim_id: str,
+    method: ast.FunctionDef,
+) -> None:
+    """Require reviewed result assertions for claim-specific computational evidence."""
+    if claim_id != "COSMO-D-014":
+        return
+
+    required_pairs = {
+        frozenset({"recovered.cube", "cube"}),
+        frozenset(
+            {
+                "recovered.storage.corrected_codewords",
+                "codeword_count",
+            }
+        ),
+    }
+    observed_pairs: set[frozenset[str]] = set()
+    for node in ast.walk(method):
+        if not isinstance(node, ast.Call):
+            continue
+        if (
+            not isinstance(node.func, ast.Attribute)
+            or node.func.attr != "assertEqual"
+            or len(node.args) < 2
+        ):
+            continue
+        left = _simple_attribute_path(node.args[0])
+        right = _simple_attribute_path(node.args[1])
+        if left is not None and right is not None:
+            observed_pairs.add(frozenset({left, right}))
+
+    missing = required_pairs - observed_pairs
+    if missing:
+        rendered = sorted(sorted(pair) for pair in missing)
+        fail(
+            f"{claim_id} regression must verify reviewed recovery results; "
+            f"missing assertEqual pairs {rendered}"
+        )
+
+
 def validate_computational_evidence_connection(
     claim_id: str,
     implementation_path: str,
@@ -2761,6 +2812,10 @@ def validate_computational_evidence_connection(
             f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
             f"does not call imported implementation binding {imported_binding}"
         )
+    validate_reviewed_computational_regression_semantics(
+        claim_id,
+        method,
+    )
 
 
 def validate_computational_implementation_target(
@@ -3464,7 +3519,7 @@ def public_assertion_is_negated(
         flags=re.IGNORECASE,
     )
     if re.search(
-        r"\bno\s+(?:evidence|basis|support)\s+that\b",
+        r"\b(?:no|insufficient)\s+(?:evidence|basis|support)\s+that\b",
         predicate_prefix,
         re.IGNORECASE,
     ) is not None:
@@ -4018,6 +4073,8 @@ def validate_public_claim_text(
         # Parse source HTML before decoding character references. Encoded
         # markup remains visible text rather than becoming raw HTML.
         rendered_text = normalize_markdown_visible_text(rendered_text)
+    elif suffix in {".html", ".htm"}:
+        rendered_text = strip_inline_html_tags(rendered_text)
     else:
         rendered_text = html.unescape(rendered_text)
         if suffix == ".tex":
