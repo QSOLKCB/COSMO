@@ -526,6 +526,28 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 source,
             )
 
+    def test_formal_anchor_ignores_lean_quoted_identifiers(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_formal_target = cast(
+            Callable[[str, str, str, str], None],
+            namespace["validate_formal_provenance_target"],
+        )
+        anchor = (
+            "theorem six_step_periodic (layer : CosmoLayer) : "
+            "psiIterate 6 layer = layer := by"
+        )
+        source = (
+            "def «theorem six_step_periodic (layer : CosmoLayer) : "
+            "psiIterate 6 layer = layer := by» : Nat := 0\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_formal_target(
+                "COSMO-D-001",
+                "cosmovirus.lean",
+                anchor,
+                source,
+            )
+
     def test_formal_target_must_enter_protected_lean_compile_closure(self) -> None:
         namespace = self.load_validator_namespace()
         validate_formal_target = cast(
@@ -619,6 +641,52 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "cannot load regression evidence",
                 str(raised.exception),
             )
+
+    def test_regression_rejects_overridden_unittest_dispatch(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        validate_regression = cast(
+            Callable[[str, str, str, Path, str], None],
+            namespace["validate_computational_regression_target"],
+        )
+        source = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        validate_e8_root_system(())\n"
+            "    def run(\n"
+            "        self, result: unittest.TestResult | None = None\n"
+            "    ) -> unittest.TestResult:\n"
+            "        if result is None:\n"
+            "            result = unittest.TestResult()\n"
+            "        result.startTest(self)\n"
+            "        result.stopTest(self)\n"
+            "        return result\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                source,
+            )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "test_regression.py"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                validate_regression(
+                    "COSMO-D-003",
+                    "tests/test_regression.py",
+                    "test_required_regression",
+                    path,
+                    source,
+                )
 
     def test_async_regression_methods_are_rejected(self) -> None:
         namespace = self.load_validator_namespace()
@@ -859,6 +927,44 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "test_required_regression", disabled_after_selected_return,
             )
 
+        disabled_comprehension = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "DISABLED = False\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        _unused = [\n"
+            "            validate_e8_root_system(())\n"
+            "            for _ in (1,) if DISABLED\n"
+            "        ]\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                disabled_comprehension,
+            )
+
+        lazy_if_expression = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        _unused = validate_e8_root_system(()) if False else None\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                lazy_if_expression,
+            )
+
         empty_comprehension = (
             "import unittest\n"
             "from cosmo_core.e8 import validate_e8_root_system\n"
@@ -947,6 +1053,26 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "COSMO-D-003", "cosmo_core/e8.py",
                 "def validate_e8_root_system", "tests/test_regression.py",
                 "test_required_regression", disabled_by_false_literal_comparison,
+            )
+
+        rebound_by_globals_update = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        globals().update({\n"
+            "            'validate_e8_root_system': lambda *_args: None\n"
+            "        })\n"
+            "        validate_e8_root_system(())\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                rebound_by_globals_update,
             )
 
         shadowed_by_parameter = (
@@ -1698,6 +1824,19 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                     "Spin(8) triality causes HPV16 capsid assembly."
                 ),
                 claim_classes,
+            )
+
+    def test_public_claim_guard_normalizes_latex_mbox(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                r"Spin(8) triality ca\mbox{uses} HPV16 capsid assembly.",
+                {},
             )
 
     def test_public_e7_math_context_is_not_biomedical(self) -> None:
