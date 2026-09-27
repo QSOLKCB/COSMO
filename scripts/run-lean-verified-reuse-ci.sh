@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PROJECT_LEAN_SOURCES=(
+  CosmoTrust.lean
+  cosmovirus.lean
+  COSMO.lean
+)
+
+if [ "${1:-}" = "--print-project-sources" ]; then
+  printf '%s\n' "${PROJECT_LEAN_SOURCES[@]}"
+  exit 0
+fi
+
 : "${GITHUB_WORKSPACE:?}"
 : "${RUNNER_TEMP:?}"
 : "${PINNED_LEAN_HOME:?}"
@@ -216,9 +227,10 @@ compile_project_module() {
     -o "$output" "$source"
 }
 
-compile_project_module CosmoTrust.lean "$project_output/CosmoTrust.olean"
-compile_project_module cosmovirus.lean "$project_output/cosmovirus.olean"
-compile_project_module COSMO.lean "$project_output/COSMO.olean"
+for source in "${PROJECT_LEAN_SOURCES[@]}"; do
+  module="${source%.lean}"
+  compile_project_module "$source" "$project_output/$module.olean"
+done
 terminate_identity cosmobuild
 end_group
 

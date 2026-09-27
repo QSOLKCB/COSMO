@@ -54,12 +54,11 @@
 \maketitle
 
 \begin{abstract}
-We recast the $\EEs\times\phigr$-$\SiS$/$\HPV$ Cosmovirus framework as a small
-category $\Cosmo$ whose objects are the descent layers and whose morphisms are
-the framework's operators. We state the composition and identity laws, exhibit
-the descent as a directed path, and show that the Ouroboros loop is an
-endofunctor whose associated ``feedback'' square commutes up to a natural
-transformation.
+This document is a Phase E category-theory design sketch built from the
+Phase C six-state cycle. It proposes a small-category presentation whose
+objects are project state labels and whose arrows mirror the transition graph.
+The free-category, quotient, endofunctor, natural-transformation, and coherence
+claims below are design targets unless and until they are formalized in Lean.
 \end{abstract}
 
 % =====================================================================
@@ -72,20 +71,26 @@ The object class $\mathrm{Ob}(\Cosmo)$ consists of the six descent layers
   \mathrm{Ob}(\Cosmo)=\{\,
   \EEs,\; P_\phigr,\; \SiS,\; \mathsf{Tri},\; \HPV,\; \Omega \,\},
 \]
-where $\EEs$ is the pure-symmetry source, $P_\phigr$ the golden-scaled layer,
-$\SiS$ the material substrate, $\mathsf{Tri}$ the triality branch point,
-$\HPV$ the infected oncocode layer, and $\Omega$ the Ouroboros loop state.
+where these names are project state labels aligned with Phase C. The Phase D
+claim ledger records the status and scope of these labels. In particular,
+SiS2/HPV terminology does not create a physical or biomedical transition
+mechanism.
 \end{definition}
 
-\begin{definition}[Generating morphisms]
-The category is generated (under composition) by the arrows
+\begin{definition}[Proposed project-state arrows]
+This proposed category presentation is symbolic project vocabulary
+(COSMO-D-010). Its objects and arrows refer only to project state labels.
+It does not claim a physical materialization process or a biomedical
+transition mechanism. COSMO-D-001 covers only the underlying finite-state
+six-step closure, not this categorical construction, which remains an
+unformalized Phase E design target. Under COSMO-D-010, the proposed project-state arrows are
 \[
 \begin{aligned}
-  s &: \EEs \to P_\phigr        &&\text{($\phigr$-SCL golden projection)}\\
-  m &: P_\phigr \to \SiS        &&\text{(materialization / substrate cast)}\\
-  t &: \SiS \to \mathsf{Tri}    &&\text{(triality $\mathrm{SO}(8)\!\to\!\mathrm{Spin}(8)$)}\\
-  h &: \mathsf{Tri} \to \HPV    &&\text{($\HPV16$ infection)}\\
-  r &: \HPV \to \Omega          &&\text{($\phigr^{101}$ recursion)}\\
+  s &: \EEs \to P_\phigr        &&\text{(project state transition)}\\
+  m &: P_\phigr \to \SiS        &&\text{(project state transition)}\\
+  t &: \SiS \to \mathsf{Tri}    &&\text{(project transition to TrialityBranch)}\\
+  h &: \mathsf{Tri} \to \HPV    &&\text{(project transition to HPV16Layer)}\\
+  r &: \HPV \to \Omega          &&\text{(project transition to OuroborosLoop)}\\
   \ell &: \Omega \to \EEs       &&\text{(Ouroboros loop-back)}
 \end{aligned}
 \]
@@ -114,19 +119,20 @@ The generators form a single directed cycle:
 \end{tikzcd}
 \end{center}
 
-\begin{proposition}[The Ouroboros is idempotent on the loop]
-The endomorphism $\Psi=\ell r h t m s$ satisfies $\ell\circ\Psi' = \id_{\EEs}$
-where $\Psi' = r h t m s : \EEs\to\Omega$; equivalently the loop-back arrow
-$\ell$ realizes $\Omega$ as a retract of the descent, encoding self-causation.
+\begin{proposition}[Phase E retract target]
+A future categorical formalization may study whether an explicit presentation
+makes the loop-back arrow part of a retract or quotient structure. Phase C
+proves only finite-state six-step closure (COSMO-D-001); ``self-causation'' is
+symbolic vocabulary (COSMO-D-010).
 \end{proposition}
 
 % =====================================================================
 \section{The commuting feedback square}
 % =====================================================================
-Split the descent into a ``symmetry'' path and a ``matter'' path. Introduce
-the auxiliary object $\SiS\!\otimes\!\mathsf{D}$ (substrate equipped with the
-$\DIAG(1,-2,1)$ contrast structure). The two ways of reaching the infected
-layer agree:
+As a Phase E design sketch, split the project-state descent into two candidate
+paths and introduce the auxiliary object $\SiS\!\otimes\!\mathsf{D}$. The
+following diagram is proposed for later formalization; it does not assert that
+the two routes commute:
 
 \begin{center}
 \begin{tikzcd}[column sep=huge, row sep=huge]
@@ -141,35 +147,31 @@ P_\phigr
 \end{tikzcd}
 \end{center}
 
-\begin{proposition}[Descent coherence]\label{prop:square}
-The square commutes up to the Ouroboros natural transformation $\eta$:
-\[
-  t \circ m \;\overset{\eta}{\Longrightarrow}\; (h\circ(-))\circ \DIAG ,
-\]
-i.e. golden-materialization-then-triality equals contrast-detection-then-
-infection, modulo $\eta$. When $\eta = \id$ the square commutes strictly.
+\begin{proposition}[Phase E coherence target]\label{prop:square}
+The displayed square is a proposed categorical presentation. A future Phase E
+formalization must define the relevant functors/morphisms and then prove or
+reject any natural transformation $\eta$; no current Lean theorem establishes
+this commuting square.
 \end{proposition}
 
 \begin{interp}
-Reading the square: whether unity first becomes matter and then triplicates,
-or first learns to perceive contrast and is then infected, it arrives at the
-same corrupted reality --- the two routes are naturally isomorphic.
+This diagram is symbolic project vocabulary (COSMO-D-010). It is intended to
+illustrate a possible future categorical comparison of the two project-state
+routes. It does not claim a natural isomorphism, a physical materialization
+process, or a biomedical transition mechanism.
 \end{interp}
 
 % =====================================================================
 \section{The Ouroboros endofunctor}
 % =====================================================================
 
-\begin{definition}[Ouroboros endofunctor]
-Define $\mathcal{O}:\Cosmo\to\Cosmo$ on objects by advancing each layer one
-step along the cycle ($\EEs\mapsto P_\phigr\mapsto\SiS\mapsto\mathsf{Tri}
-\mapsto\HPV\mapsto\Omega\mapsto\EEs$) and on morphisms by conjugation with the
-loop. Because the cycle has length $6$,
-\[
-  \mathcal{O}^{6} \;\cong\; \mathrm{Id}_{\Cosmo},
-\]
-so $\mathcal{O}$ generates a $\mathbb{Z}/6\mathbb{Z}$ action: the framework is
-periodic, and $\Omega\xrightarrow{\ell}\EEs$ is the fixed closure of one turn.
+\begin{definition}[Proposed Ouroboros endofunctor]
+On objects, the intended map advances one step along the authoritative Phase C
+cycle ($\EEs\mapsto P_\phigr\mapsto\SiS\mapsto\mathsf{Tri}
+\mapsto\HPV\mapsto\Omega\mapsto\EEs$). Phase C proves the corresponding
+six-step object closure (COSMO-D-001). Defining its action on morphisms and proving an actual
+endofunctor, $\mathbb{Z}/6\mathbb{Z}$ action, or categorical equivalence remains
+Phase E work.
 \end{definition}
 
 \begin{proposition}[Fixed point]
