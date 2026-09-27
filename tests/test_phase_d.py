@@ -1158,6 +1158,27 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 unreachable_handler,
             )
 
+        unreachable_after_finally_return = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        try:\n"
+            "            pass\n"
+            "        finally:\n"
+            "            return\n"
+            "        validate_e8_root_system(())\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                unreachable_after_finally_return,
+            )
+
         unreachable_inside_try = (
             "import unittest\n"
             "from cosmo_core.e8 import validate_e8_root_system\n"
@@ -1607,6 +1628,17 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             "\\label{COSMO-D-004}\n",
         )
         self.assertNotIn("COSMO-D-004", label_only)
+        unused_macro = strip_comments(
+            "sample.tex",
+            (
+                "\\newcommand{\\unusedDAnchor}"
+                "{capsid branching (COSMO-D-011)}\n"
+            ),
+        )
+        self.assertNotIn(
+            "capsid branching (COSMO-D-011)",
+            unused_macro,
+        )
 
     def test_d004_provenance_anchor_is_claim_specific(self) -> None:
         ledger = self.load_ledger()
@@ -1754,6 +1786,15 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             validate_public_claim_text(
                 "README.md",
                 "COSMO-D-011: Spin(8) triality causes HPV16 capsid assembly.",
+                claim_classes,
+            )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                (
+                    "COSMO-D-011: This goes beyond a symbolic association: "
+                    "Spin(8) triality causes HPV16 capsid assembly."
+                ),
                 claim_classes,
             )
 
@@ -2021,6 +2062,26 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 claim_classes,
             )
 
+    def test_public_nested_list_items_do_not_share_claim_scope(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    "- COSMO-D-011 records a symbolic association\n"
+                    "    - Spin(8) triality causes HPV16 capsid assembly.\n"
+                ),
+                claim_classes,
+            )
+
     def test_public_claim_guard_scans_markdown_table_cells(self) -> None:
         namespace = self.load_validator_namespace()
         validate_public_claim_text = cast(
@@ -2235,6 +2296,15 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             validate_public_claim_text(
                 "README.md",
                 (
+                    "Spin(8) triality cannot be ignored because it causes "
+                    "HPV16 capsid assembly."
+                ),
+                claim_classes,
+            )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                (
                     "No caveat changes the fact that Spin(8) triality "
                     "causes HPV16 capsid assembly."
                 ),
@@ -2356,6 +2426,24 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             "edge-sharing $\\mathrm{SiS_4}$ tetrahedra (COSMO-D-005)",
             source,
         )
+
+    def test_public_claim_scan_strips_fences_before_html_comments(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    "```text\n"
+                    "<!--\n"
+                    "```\n\n"
+                    "Spin(8) triality causes HPV16 capsid assembly.\n"
+                ),
+                {},
+            )
 
     def test_public_claim_scan_ignores_indented_markdown_code(self) -> None:
         namespace = self.load_validator_namespace()
@@ -2518,6 +2606,28 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         )
         self.assertNotIn("![tracking]", rendered)
         self.assertIn("&#33;&#91;tracking&#93;", rendered)
+
+    def test_public_document_snapshot_survives_later_deletion(self) -> None:
+        namespace = self.load_validator_namespace()
+        snapshot_documents = cast(
+            Callable[[Path], dict[str, str]],
+            namespace["snapshot_public_documents"],
+        )
+        validate_documents = cast(
+            Callable[[dict[str, str], dict[str, str] | None], None],
+            namespace["validate_public_documents"],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "UNSUPPORTED.md"
+            target.write_text(
+                "Spin(8) triality causes HPV16 capsid assembly.\n",
+                encoding="utf-8",
+            )
+            snapshot = snapshot_documents(root)
+            target.unlink()
+            with self.assertRaises(SystemExit):
+                validate_documents({}, snapshot)
 
     def test_public_document_discovery_includes_new_root_documents(self) -> None:
         namespace = self.load_validator_namespace()
