@@ -5063,5 +5063,88 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         )
 
 
+    def test_markdown_provenance_hidden_css_comment_anchor_is_rejected(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_provenance = cast(
+            Callable[
+                [str, str, object, dict[str, str] | None],
+                set[str],
+            ],
+            namespace["validate_provenance"],
+        )
+        claim = next(
+            item
+            for item in self.load_ledger()["claims"]
+            if item["id"] == "COSMO-D-006"
+        )
+        for source in (
+            '<span style="display: none /* comment */">NC_001526.4</span>',
+            '<span style="display:/* comment */none">NC_001526.4</span>',
+        ):
+            with self.subTest(source=source):
+                with self.assertRaisesRegex(SystemExit, "anchor"):
+                    validate_provenance(
+                        "COSMO-D-006",
+                        "SCIENTIFIC",
+                        claim["provenance"],
+                        {"CLAIM-LEDGER.md": source},
+                    )
+
+    def test_markdown_provenance_formats_visible_anchor_without_losing_underscore(
+        self,
+    ) -> None:
+        namespace = self.load_validator_namespace()
+        validate_provenance = cast(
+            Callable[
+                [str, str, object, dict[str, str] | None],
+                set[str],
+            ],
+            namespace["validate_provenance"],
+        )
+        claim = next(
+            item
+            for item in self.load_ledger()["claims"]
+            if item["id"] == "COSMO-D-006"
+        )
+        validate_provenance(
+            "COSMO-D-006",
+            "SCIENTIFIC",
+            claim["provenance"],
+            {"CLAIM-LEDGER.md": "NC_**001526**.4"},
+        )
+        validate_provenance(
+            "COSMO-D-006",
+            "SCIENTIFIC",
+            claim["provenance"],
+            {"CLAIM-LEDGER.md": "NC_001526.4"},
+        )
+
+    def test_markdown_provenance_svg_defs_anchor_is_rejected(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_provenance = cast(
+            Callable[
+                [str, str, object, dict[str, str] | None],
+                set[str],
+            ],
+            namespace["validate_provenance"],
+        )
+        claim = next(
+            item
+            for item in self.load_ledger()["claims"]
+            if item["id"] == "COSMO-D-006"
+        )
+        with self.assertRaisesRegex(SystemExit, "anchor"):
+            validate_provenance(
+                "COSMO-D-006",
+                "SCIENTIFIC",
+                claim["provenance"],
+                {
+                    "CLAIM-LEDGER.md": (
+                        "<svg><defs><text>NC_001526.4</text></defs></svg>"
+                    )
+                },
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

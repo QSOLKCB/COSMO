@@ -4642,7 +4642,7 @@ def validate_provenance(
             anchor_text = text
             suffix = Path(path_text).suffix.lower()
             if suffix in {".md", ".markdown"}:
-                anchor_text = strip_inline_html_tags(
+                anchor_text = normalize_markdown_provenance_text(
                     strip_public_nonrendered_comments(
                         path_text,
                         text,
@@ -5334,6 +5334,21 @@ class _VisibleHTMLTextParser(HTMLParser):
         }
     )
 
+    NON_RENDERED_SVG_CONTAINERS = frozenset(
+        {
+            "defs",
+            "symbol",
+            "clippath",
+            "mask",
+            "pattern",
+            "marker",
+            "lineargradient",
+            "radialgradient",
+            "filter",
+            "metadata",
+        }
+    )
+
     VISIBLE_INPUT_VALUE_TYPES = frozenset(
         {
             "button", "submit", "reset", "text", "search", "email",
@@ -5469,6 +5484,11 @@ class _VisibleHTMLTextParser(HTMLParser):
         }
         hidden_attribute = "hidden" in attribute_map
         style_value = attribute_map.get("style") or ""
+        style_value = re.sub(
+            r"/\*[\s\S]*?\*/",
+            "",
+            style_value,
+        )
         css_hidden = re.search(
             r"(?:^|;)\s*(?:display\s*:\s*none|"
             r"visibility\s*:\s*hidden)"
@@ -5480,6 +5500,7 @@ class _VisibleHTMLTextParser(HTMLParser):
             hidden_attribute
             or css_hidden
             or normalized == "template"
+            or normalized in self.NON_RENDERED_SVG_CONTAINERS
         )
 
         if normalized in self.VOID_TAGS:
@@ -5581,6 +5602,32 @@ def normalize_markdown_visible_text(text: str) -> str:
         text,
     )
     return re.sub(r"(?:\*\*|__|~~|\*|_)", "", text)
+
+
+def normalize_markdown_provenance_text(text: str) -> str:
+    """Render Markdown formatting for exact provenance-anchor matching."""
+    text = normalize_markdown_code_spans(text)
+    text = strip_inline_html_tags(text)
+    text = re.sub(
+        r"\\([\\`*_{}\[\]()#+\-.!|>~])",
+        r"\1",
+        text,
+    )
+
+    paired_patterns = (
+        re.compile(r"(?s)(\*\*|~~)(?=\S)(.+?)(?<=\S)\1"),
+        re.compile(
+            r"(?s)(?<!\w)(__|_)(?=\S)(.+?)(?<=\S)\1(?!\w)"
+        ),
+        re.compile(r"(?s)(\*)(?=\S)(.+?)(?<=\S)\1"),
+    )
+    for _ in range(4):
+        previous = text
+        for pattern in paired_patterns:
+            text = pattern.sub(r"\2", text)
+        if text == previous:
+            break
+    return text
 
 
 def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
