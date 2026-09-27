@@ -35,6 +35,11 @@ PUBLIC_SYMBOLIC_QUALIFIER_RE = re.compile(
     r"(?:(?:established|biological)\s+){0,2}mechanism)\b",
     re.IGNORECASE,
 )
+PUBLIC_HYPOTHESIS_QUALIFIER_RE = re.compile(
+    r"\b(?:hypothesis|hypothetical|proposed|future|could|may|might|"
+    r"would|testable|tested|predictive|prediction|if)\b",
+    re.IGNORECASE,
+)
 IDENTIFIER_PATTERNS: dict[str, re.Pattern[str]] = {
     "PMID": re.compile(r"[1-9][0-9]{0,7}$"),
     "PMCID": re.compile(r"PMC[1-9][0-9]*$"),
@@ -274,7 +279,7 @@ PINNED_REVIEWED_CLAIM_RECORDS: dict[str, dict[str, Any]] = cast(
     "provenance": [
       {
         "path": "cosmovirus.tex",
-        "anchor": "capsid",
+        "anchor": "capsid branching (COSMO-D-011)",
         "role": "historical_symbolic_mapping"
       }
     ],
@@ -1632,6 +1637,16 @@ def _static_boolean_value(
         return bool(expression.keys)
     if isinstance(expression, ast.Name):
         return module_constants.get(expression.id)
+    if (
+        isinstance(expression, ast.Call)
+        and isinstance(expression.func, ast.Name)
+        and expression.func.id == "bool"
+        and not expression.keywords
+        and len(expression.args) <= 1
+    ):
+        if not expression.args:
+            return False
+        return _static_boolean_value(expression.args[0], module_constants)
     if isinstance(expression, ast.UnaryOp) and isinstance(expression.op, ast.Not):
         operand = _static_boolean_value(expression.operand, module_constants)
         return None if operand is None else not operand
@@ -3190,6 +3205,11 @@ def strip_latex_disabled_branches(text: str) -> str:
 def normalize_latex_visible_text(text: str) -> str:
     """Approximate visible LaTeX prose for semantic matching."""
     text = re.sub(
+        r"\\href\s*\{[^{}\n]*\}\s*\{([^{}\n]*)\}",
+        r"\1",
+        text,
+    )
+    text = re.sub(
         r"\\textcolor\s*\{[^{}\n]*\}\s*\{([^{}\n]*)\}",
         r"\1",
         text,
@@ -3316,6 +3336,11 @@ def validate_public_claim_text(
                 if (
                     evidence_class == "SYMBOLIC"
                     and PUBLIC_SYMBOLIC_QUALIFIER_RE.search(binding_scope) is None
+                ):
+                    continue
+                if (
+                    evidence_class == "HYPOTHESIS"
+                    and PUBLIC_HYPOTHESIS_QUALIFIER_RE.search(binding_scope) is None
                 ):
                     continue
                 claim_domains, claim_entities = semantics.get(
