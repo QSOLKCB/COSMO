@@ -1794,6 +1794,47 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 aliased_import_with_shadow,
             )
 
+    def test_d014_regression_requires_reviewed_recovery_assertions(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b5.py"
+        ).read_text(encoding="utf-8")
+        validate_connection(
+            "COSMO-D-014",
+            "cosmo_core/storage.py",
+            "def recover_cube_storage",
+            "tests/test_phase_b5.py",
+            "test_full_cube_recovers_one_bit_error_in_every_codeword",
+            regression_text,
+        )
+
+        expected_assertions = (
+            "        self.assertEqual(recovered.cube, cube)\n"
+            "        self.assertEqual(\n"
+            "            recovered.storage.corrected_codewords,\n"
+            "            codeword_count,\n"
+            "        )\n"
+        )
+        weakened = regression_text.replace(
+            expected_assertions,
+            "        _ = recovered\n",
+            1,
+        )
+        self.assertNotEqual(weakened, regression_text)
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-014",
+                "cosmo_core/storage.py",
+                "def recover_cube_storage",
+                "tests/test_phase_b5.py",
+                "test_full_cube_recovers_one_bit_error_in_every_codeword",
+                weakened,
+            )
+
     def test_implementation_provenance_requires_executable_project_source(self) -> None:
         namespace = self.load_validator_namespace()
         validate_implementation = cast(
@@ -2182,6 +2223,12 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             )
         with self.assertRaises(SystemExit):
             validate_public_claim_text(
+                "sample.md",
+                "Spin(8) triality is essential for HPV16 capsid assembly.",
+                {},
+            )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
                 "README.md",
                 "HPV16 capsid assembly depends on Spin(8) triality.",
                 claim_classes,
@@ -2205,6 +2252,14 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             "sample.md",
             (
                 "There is no evidence that Spin(8) triality causes "
+                "HPV16 capsid assembly."
+            ),
+            {},
+        )
+        validate_public_claim_text(
+            "sample.md",
+            (
+                "There is insufficient evidence that Spin(8) triality causes "
                 "HPV16 capsid assembly."
             ),
             {},
@@ -3281,6 +3336,28 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 validate_documents({}, snapshot)
 
+    def test_public_html_documents_are_discovered_and_scanned(self) -> None:
+        namespace = self.load_validator_namespace()
+        snapshot_documents = cast(
+            Callable[[Path], dict[str, str]],
+            namespace["snapshot_public_documents"],
+        )
+        validate_documents = cast(
+            Callable[[dict[str, str], dict[str, str] | None], None],
+            namespace["validate_public_documents"],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "unledgered-public.html"
+            target.write_text(
+                "<p>Spin(8) triality causes HPV16 capsid assembly.</p>\n",
+                encoding="utf-8",
+            )
+            snapshot = snapshot_documents(root)
+            self.assertIn("unledgered-public.html", snapshot)
+            with self.assertRaises(SystemExit):
+                validate_documents({}, snapshot)
+
     def test_public_document_discovery_includes_new_root_documents(self) -> None:
         namespace = self.load_validator_namespace()
         discover_paths = cast(
@@ -3296,6 +3373,10 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             )
             (root / "NEW_PUBLIC.md").write_text(
                 "Spin(8) triality causes HPV16 capsid assembly.\n",
+                encoding="utf-8",
+            )
+            (root / "PUBLIC.html").write_text(
+                "<p>public html</p>\n",
                 encoding="utf-8",
             )
             audit = root / "audit"
@@ -3318,6 +3399,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 (
                     "EXTRA.markdown",
                     "NEW_PUBLIC.md",
+                    "PUBLIC.html",
                     "README.md",
                     "audit/AUDIT-RESOLUTION.md",
                 ),
