@@ -1025,6 +1025,35 @@ def strip_lean_comments(text: str) -> str:
     return "".join(result)
 
 
+def strip_lean_syntax_quotations(text: str) -> str:
+    """Blank Lean syntax quotations while preserving line structure."""
+    result = list(text)
+    index = 0
+    opener = re.compile(r"`\([A-Za-z_][A-Za-z0-9_]*\|")
+    while index < len(text):
+        match = opener.match(text, index)
+        if match is None:
+            index += 1
+            continue
+
+        cursor = match.end()
+        depth = 1
+        while cursor < len(text) and depth:
+            character = text[cursor]
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+            cursor += 1
+
+        end = cursor if depth == 0 else len(text)
+        for position in range(index, end):
+            result[position] = "\n" if text[position] == "\n" else " "
+        index = end
+
+    return "".join(result)
+
+
 def protected_lean_sources() -> set[str]:
     """Execute the protected runner's source-inventory mode."""
     try:
@@ -1098,7 +1127,8 @@ def validate_formal_provenance_target(
             "declaration through ':= by'"
         )
     comment_free_text = strip_lean_comments(text)
-    normalized_source = normalize_lean_declaration(comment_free_text)
+    declaration_text = strip_lean_syntax_quotations(comment_free_text)
+    normalized_source = normalize_lean_declaration(declaration_text)
     normalized_anchor = normalize_lean_declaration(anchor)
     if normalized_anchor not in normalized_source:
         fail(
@@ -1158,6 +1188,17 @@ def locate_unittest_regression(
     for node in tree.body:
         if not isinstance(node, ast.ClassDef):
             continue
+        contains_anchor = any(
+            isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and member.name == anchor
+            for member in node.body
+        )
+        if contains_anchor and node.decorator_list:
+            fail(
+                f"{claim_id} regression class {node.name!r} containing "
+                f"{anchor!r} must be undecorated so the reviewed class is "
+                "the executed unittest class"
+            )
         for member in node.body:
             if isinstance(member, ast.AsyncFunctionDef) and member.name == anchor:
                 fail(
@@ -1249,6 +1290,37 @@ class _CallFinder(ast.NodeVisitor):
             self.found = True
             return
         self.generic_visit(node)
+
+    def _visit_comprehension(
+        self,
+        generators: list[ast.comprehension],
+        body: list[ast.expr],
+    ) -> None:
+        for generator in generators:
+            self.visit(generator.iter)
+            if self.found:
+                return
+            if _static_iterable_has_items(generator.iter) is False:
+                return
+            for condition in generator.ifs:
+                self.visit(condition)
+                if self.found:
+                    return
+                if _static_boolean_value(condition, {}) is False:
+                    return
+        for expression in body:
+            self.visit(expression)
+            if self.found:
+                return
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self._visit_comprehension(node.generators, [node.elt])
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self._visit_comprehension(node.generators, [node.elt])
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self._visit_comprehension(node.generators, [node.key, node.value])
 
     def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
         # A generator body is deferred. Python evaluates only the outermost
@@ -1920,6 +1992,11 @@ def validate_computational_regression_target(
             str(path),
             run_name=f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
         )
+    except SystemExit as exc:
+        fail(
+            f"{claim_id} cannot load regression evidence {path_text}: "
+            f"SystemExit({exc.code!r})"
+        )
     except Exception as exc:
         fail(
             f"{claim_id} cannot load regression evidence {path_text}: "
@@ -2531,7 +2608,7 @@ def strip_markdown_link_destinations(text: str) -> str:
 
 
 class _VisibleHTMLTextParser(HTMLParser):
-    """Collect rendered inline-HTML text while discarding tags/attributes."""
+    """Collect rendered inline-HTML text while discarding hidden/raw subtrees."""
 
     BLOCK_TAGS = frozenset(
         {
@@ -2560,10 +2637,31 @@ class _VisibleHTMLTextParser(HTMLParser):
         }
     )
 
+    VOID_TAGS = frozenset(
+        {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "track",
+            "wbr",
+        }
+    )
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.raw_text_depth = 0
+        self.hidden_depth = 0
+        self.open_tags: list[tuple[str, bool]] = []
 
     def _append_block_boundary(self) -> None:
         if not self.parts or not self.parts[-1].endswith("\n\n"):
@@ -2574,31 +2672,63 @@ class _VisibleHTMLTextParser(HTMLParser):
         tag: str,
         attrs: list[tuple[str, str | None]],
     ) -> None:
-        del attrs
         normalized = tag.lower()
+        hidden_here = any(name.lower() == "hidden" for name, _value in attrs)
+
+        if normalized in self.VOID_TAGS:
+            if (
+                not hidden_here
+                and self.raw_text_depth == 0
+                and self.hidden_depth == 0
+                and normalized in self.BLOCK_TAGS
+            ):
+                self._append_block_boundary()
+            return
+
+        self.open_tags.append((normalized, hidden_here))
+        if hidden_here:
+            self.hidden_depth += 1
         if normalized in {"script", "style"}:
             self.raw_text_depth += 1
             return
-        if self.raw_text_depth == 0 and normalized in self.BLOCK_TAGS:
+        if (
+            self.raw_text_depth == 0
+            and self.hidden_depth == 0
+            and normalized in self.BLOCK_TAGS
+        ):
             self._append_block_boundary()
+
+    def _close_tag(self, normalized: str) -> None:
+        for index in range(len(self.open_tags) - 1, -1, -1):
+            if self.open_tags[index][0] != normalized:
+                continue
+            closing = self.open_tags[index:]
+            del self.open_tags[index:]
+            for _tag, hidden_here in closing:
+                if hidden_here and self.hidden_depth:
+                    self.hidden_depth -= 1
+            return
 
     def handle_endtag(self, tag: str) -> None:
         normalized = tag.lower()
+        was_visible = self.raw_text_depth == 0 and self.hidden_depth == 0
         if normalized in {"script", "style"} and self.raw_text_depth:
             self.raw_text_depth -= 1
-            return
-        if self.raw_text_depth == 0 and normalized in self.BLOCK_TAGS:
+        self._close_tag(normalized)
+        if was_visible and normalized in self.BLOCK_TAGS:
             self._append_block_boundary()
 
     def handle_data(self, data: str) -> None:
-        if self.raw_text_depth == 0:
+        if self.raw_text_depth == 0 and self.hidden_depth == 0:
             self.parts.append(data)
 
     def handle_entityref(self, name: str) -> None:
-        self.parts.append(html.unescape(f"&{name};"))
+        if self.raw_text_depth == 0 and self.hidden_depth == 0:
+            self.parts.append(html.unescape(f"&{name};"))
 
     def handle_charref(self, name: str) -> None:
-        self.parts.append(html.unescape(f"&#{name};"))
+        if self.raw_text_depth == 0 and self.hidden_depth == 0:
+            self.parts.append(html.unescape(f"&#{name};"))
 
 
 def strip_inline_html_tags(text: str) -> str:
@@ -2611,8 +2741,21 @@ def strip_inline_html_tags(text: str) -> str:
     return "".join(parser.parts)
 
 
+def normalize_markdown_code_spans(text: str) -> str:
+    """Remove inline-code delimiters while preserving their visible content."""
+    pattern = re.compile(r"(?s)(?<!\\)(`+)(.*?)(?<!\\)\1")
+    return pattern.sub(
+        lambda match: html.escape(
+            re.sub(r"\s*\n\s*", " ", match.group(2)),
+            quote=False,
+        ),
+        text,
+    )
+
+
 def normalize_markdown_visible_text(text: str) -> str:
     """Approximate rendered Markdown text for semantic matching."""
+    text = normalize_markdown_code_spans(text)
     text = strip_inline_html_tags(text)
     text = re.sub(
         r"\\([\\`*_{}\[\]()#+\-.!|>~])",
