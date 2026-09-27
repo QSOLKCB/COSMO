@@ -1558,7 +1558,7 @@ def locate_unittest_regression(
             for member in node.body:
                 if (
                     isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and member.name in {"run", "_callTestMethod"}
+                    and member.name in UNITTEST_DISPATCH_HOOKS
                 ):
                     fail(
                         f"{claim_id} regression class {node.name!r} may not "
@@ -1566,7 +1566,7 @@ def locate_unittest_regression(
                     )
                 if isinstance(member, ast.Assign) and any(
                     isinstance(target, ast.Name)
-                    and target.id in {"run", "_callTestMethod"}
+                    and target.id in UNITTEST_DISPATCH_HOOKS
                     for target in member.targets
                 ):
                     fail(
@@ -1576,7 +1576,7 @@ def locate_unittest_regression(
                 if (
                     isinstance(member, ast.AnnAssign)
                     and isinstance(member.target, ast.Name)
-                    and member.target.id in {"run", "_callTestMethod"}
+                    and member.target.id in UNITTEST_DISPATCH_HOOKS
                 ):
                     fail(
                         f"{claim_id} regression class {node.name!r} may not "
@@ -3368,6 +3368,11 @@ print("__COSMO_REGRESSION_OK__")
         detail = detail_lines[-1] if detail_lines else (
             f"subprocess exit {completed.returncode}"
         )
+        if completed.returncode == 20:
+            fail(
+                f"{claim_id} cannot load regression evidence {path_text}: "
+                f"{detail}"
+            )
         fail(
             f"{claim_id} regression evidence {path_text}:{anchor} did not pass "
             f"in isolated execution: {detail}"
