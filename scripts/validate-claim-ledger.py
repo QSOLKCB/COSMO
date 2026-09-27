@@ -540,7 +540,7 @@ PUBLIC_DOMAIN_PATTERNS: dict[str, re.Pattern[str]] = {
         re.IGNORECASE,
     ),
     "biomedicine": re.compile(
-        r"\b(?:HPV16|HPV|capsid|p16|human\s+papillomavirus"
+        r"\b(?:HPV_?16|HPV|capsid|p16|human\s+papillomavirus"
         r"(?:\s+type\s+16)?)\b",
         re.IGNORECASE,
     ),
@@ -563,7 +563,7 @@ PUBLIC_ENTITY_PATTERNS: dict[str, re.Pattern[str]] = {
     "e8": re.compile(r"\b(?:E8|E_8)\b", re.IGNORECASE),
     "weyl": re.compile(r"\bWeyl\b", re.IGNORECASE),
     "hpv": re.compile(
-        r"\b(?:HPV16|HPV|human\s+papillomavirus(?:\s+type\s+16)?)\b",
+        r"\b(?:HPV_?16|HPV|human\s+papillomavirus(?:\s+type\s+16)?)\b",
         re.IGNORECASE,
     ),
     "capsid": re.compile(r"\bcapsid\b", re.IGNORECASE),
@@ -582,7 +582,7 @@ PUBLIC_ENTITY_PATTERNS: dict[str, re.Pattern[str]] = {
 }
 PUBLIC_BIOMEDICAL_E6_E7_RE = re.compile(r"\bE[67]\b", re.IGNORECASE)
 PUBLIC_BIOMEDICAL_E6_E7_CONTEXT_RE = re.compile(
-    r"\b(?:HPV16?|viral|virolog(?:y|ical)|oncoproteins?|proteins?|"
+    r"\b(?:HPV_?16|HPV|viral|virolog(?:y|ical)|oncoproteins?|proteins?|"
     r"expression|transcription|p53|pRB|RB1|cervical|capsid)\b",
     re.IGNORECASE,
 )
@@ -590,7 +590,7 @@ PUBLIC_BIOMEDICAL_E6_E7_CONTEXT_RE = re.compile(
 PUBLIC_ASSERTION_RE = re.compile(
     r"\b(?:causes?|caused|drives?|driven|produces?|produced|"
     r"determines?|determined|explains?|explained|proves?|proved|"
-    r"demonstrates?|demonstrated|establishes?|established|"
+    r"demonstrates?|demonstrated|establish(?:es)?|"
     r"validates?|validated|predicts?|predicted|induces?|induced|"
     r"triggers?|triggered|promotes?|promoted|mediates?|mediated|"
     r"enables?|enabled|activates?|activated|"
@@ -1356,16 +1356,27 @@ def _is_unittest_testcase_expression(node: ast.expr) -> bool:
 
 
 class _UnittestDispatchMutationFinder(ast.NodeVisitor):
-    """Detect module-level mutation of unittest.TestCase dispatch hooks."""
+    """Detect module-level mutation of unittest dispatch hooks."""
 
-    def __init__(self) -> None:
+    def __init__(self, claimed_class: str | None = None) -> None:
+        self.claimed_class = claimed_class
         self.found = False
+
+    def _is_dispatch_target(self, node: ast.expr) -> bool:
+        return (
+            _is_unittest_testcase_expression(node)
+            or (
+                self.claimed_class is not None
+                and isinstance(node, ast.Name)
+                and node.id == self.claimed_class
+            )
+        )
 
     def _target_is_dispatch_hook(self, target: ast.expr) -> bool:
         return (
             isinstance(target, ast.Attribute)
             and target.attr in UNITTEST_DISPATCH_HOOKS
-            and _is_unittest_testcase_expression(target.value)
+            and self._is_dispatch_target(target.value)
         )
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -1373,7 +1384,7 @@ class _UnittestDispatchMutationFinder(ast.NodeVisitor):
             isinstance(node.func, ast.Name)
             and node.func.id in {"setattr", "delattr"}
             and len(node.args) >= 2
-            and _is_unittest_testcase_expression(node.args[0])
+            and self._is_dispatch_target(node.args[0])
             and isinstance(node.args[1], ast.Constant)
             and node.args[1].value in UNITTEST_DISPATCH_HOOKS
         ):
@@ -1383,7 +1394,7 @@ class _UnittestDispatchMutationFinder(ast.NodeVisitor):
             isinstance(node.func, ast.Attribute)
             and node.func.attr in {"__setattr__", "__delattr__"}
             and len(node.args) >= 2
-            and _is_unittest_testcase_expression(node.args[0])
+            and self._is_dispatch_target(node.args[0])
             and isinstance(node.args[1], ast.Constant)
             and node.args[1].value in UNITTEST_DISPATCH_HOOKS
         ):
@@ -1422,8 +1433,11 @@ class _UnittestDispatchMutationFinder(ast.NodeVisitor):
         return
 
 
-def _module_mutates_unittest_dispatch(tree: ast.Module) -> bool:
-    finder = _UnittestDispatchMutationFinder()
+def _module_mutates_unittest_dispatch(
+    tree: ast.Module,
+    claimed_class: str | None = None,
+) -> bool:
+    finder = _UnittestDispatchMutationFinder(claimed_class)
     for statement in tree.body:
         finder.visit(statement)
         if finder.found:
@@ -1534,7 +1548,13 @@ def locate_unittest_regression(
             f"{claim_id} regression anchor {anchor!r} must identify exactly "
             f"one unittest method in {path_text}"
         )
-    return matches[0]
+    class_name, method = matches[0]
+    if _module_mutates_unittest_dispatch(tree, class_name):
+        fail(
+            f"{claim_id} regression class {class_name!r} has module-level "
+            "unittest dispatch mutation"
+        )
+    return class_name, method
 
 
 def _implementation_module_name(path_text: str) -> str:
@@ -1935,6 +1955,33 @@ def _static_match_pattern_matches(
     return None
 
 
+def _static_integer_value(expression: ast.expr) -> int | None:
+    if (
+        isinstance(expression, ast.Constant)
+        and isinstance(expression.value, int)
+        and not isinstance(expression.value, bool)
+    ):
+        return expression.value
+    if (
+        isinstance(expression, ast.Call)
+        and isinstance(expression.func, ast.Name)
+        and expression.func.id == "len"
+        and len(expression.args) == 1
+        and not expression.keywords
+    ):
+        value = expression.args[0]
+        if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+            return len(value.elts)
+        if isinstance(value, ast.Dict):
+            return len(value.keys)
+        if (
+            isinstance(value, ast.Constant)
+            and isinstance(value.value, (str, bytes))
+        ):
+            return len(value.value)
+    return None
+
+
 def _static_iterable_has_items(expression: ast.expr) -> bool | None:
     """Resolve obviously empty/non-empty literal iterables used by for-loops."""
     if isinstance(expression, (ast.List, ast.Tuple, ast.Set)):
@@ -1952,18 +1999,20 @@ def _static_iterable_has_items(expression: ast.expr) -> bool | None:
         and expression.func.id == "range"
         and not expression.keywords
         and 1 <= len(expression.args) <= 3
-        and all(
-            isinstance(arg, ast.Constant)
-            and isinstance(arg.value, int)
-            and not isinstance(arg.value, bool)
-            for arg in expression.args
-        )
     ):
         integer_args = [
-            cast(int, cast(ast.Constant, arg).value)
-            for arg in expression.args
+            _static_integer_value(argument)
+            for argument in expression.args
         ]
-        return bool(range(*integer_args))
+        if all(value is not None for value in integer_args):
+            return bool(
+                range(
+                    *[
+                        cast(int, value)
+                        for value in integer_args
+                    ]
+                )
+            )
     return None
 
 
@@ -2390,21 +2439,32 @@ class _BindingMutationFinder(ast.NodeVisitor):
                     return
         self.generic_visit(node)
 
+    def _record_alias_assignment(
+        self,
+        target: ast.expr,
+        value: ast.expr,
+    ) -> None:
+        if isinstance(target, ast.Name):
+            if isinstance(value, ast.Name) and value.id in self.aliases:
+                self.aliases.add(target.id)
+            else:
+                self.aliases.discard(target.id)
+            return
+        if (
+            isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+        ):
+            for target_item, value_item in zip(target.elts, value.elts):
+                self._record_alias_assignment(target_item, value_item)
+
     def visit_Assign(self, node: ast.Assign) -> None:
         if any(self._target_mentions_binding(target) for target in node.targets):
             self.found = True
             return
 
-        value_is_alias = (
-            isinstance(node.value, ast.Name)
-            and node.value.id in self.aliases
-        )
         for target in node.targets:
-            if isinstance(target, ast.Name):
-                if value_is_alias:
-                    self.aliases.add(target.id)
-                else:
-                    self.aliases.discard(target.id)
+            self._record_alias_assignment(target, node.value)
 
         self.visit(node.value)
 
@@ -2786,11 +2846,15 @@ def validate_computational_regression_target(
         anchor,
         text,
     )
+    namespace: dict[str, Any] = {
+        "__name__": f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
+        "__file__": str(path),
+        "__package__": None,
+        "__cached__": None,
+    }
     try:
-        namespace = runpy.run_path(
-            str(path),
-            run_name=f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
-        )
+        code = compile(text, str(path), "exec")
+        exec(code, namespace)
     except SystemExit as exc:
         fail(
             f"{claim_id} cannot load regression evidence {path_text}: "
@@ -3495,6 +3559,9 @@ class _VisibleHTMLTextParser(HTMLParser):
             "aside",
             "blockquote",
             "div",
+            "dl",
+            "dt",
+            "dd",
             "footer",
             "h1",
             "h2",
@@ -3732,7 +3799,10 @@ def strip_markdown_fenced_blocks(text: str) -> str:
 
 def strip_latex_disabled_branches(text: str) -> str:
     """Blank known-disabled TeX conditionals while preserving visible else branches."""
-    token_re = re.compile(r"\\(?:iftrue|iffalse|else|fi)\b")
+    token_re = re.compile(
+        r"\\ifnum\s*([+-]?\d+)\s*(=|<|>)\s*([+-]?\d+)|"
+        r"\\(?:iftrue|iffalse|else|fi)\b"
+    )
     stack: list[tuple[bool, bool]] = []
     active = True
     parts: list[str] = []
@@ -3742,7 +3812,20 @@ def strip_latex_disabled_branches(text: str) -> str:
         parts.append(chunk if active else _blank_non_newlines(chunk))
         token = match.group(0).lower()
         parts.append(_blank_non_newlines(match.group(0)))
-        if token in {"\\iftrue", "\\iffalse"}:
+        if match.group(1) is not None:
+            left = int(match.group(1))
+            operator = cast(str, match.group(2))
+            right = int(cast(str, match.group(3)))
+            condition = (
+                left == right
+                if operator == "="
+                else left < right
+                if operator == "<"
+                else left > right
+            )
+            stack.append((active, condition))
+            active = active and condition
+        elif token in {"\\iftrue", "\\iffalse"}:
             condition = token == "\\iftrue"
             stack.append((active, condition))
             active = active and condition
