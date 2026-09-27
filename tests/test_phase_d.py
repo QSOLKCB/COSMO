@@ -108,6 +108,18 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         )
 
 
+    def test_ledger_root_rejects_unreviewed_fields(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_fields = cast(
+            Callable[[dict[str, Any]], None],
+            namespace["validate_ledger_fields"],
+        )
+        ledger = deepcopy(self.load_ledger())
+        validate_fields(ledger)
+        ledger["unreviewed_note"] = "Spin(8) causes HPV16 disease."
+        with self.assertRaises(SystemExit):
+            validate_fields(ledger)
+
     def test_identifier_syntax_rejects_malformed_values(self) -> None:
         namespace = self.load_validator_namespace()
         validate_identifiers = cast(
@@ -576,6 +588,35 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 source,
             )
 
+    def test_formal_anchor_rejects_section_local_shadowing(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_formal_target = cast(
+            Callable[[str, str, str, str], None],
+            namespace["validate_formal_provenance_target"],
+        )
+        anchor = (
+            "theorem six_step_periodic (layer : CosmoLayer) : "
+            "psiIterate 6 layer = layer := by"
+        )
+        source = (
+            "namespace Cosmovirus\n"
+            "section\n"
+            "variable (CosmoLayer : Type)\n"
+            "variable (psiIterate : Nat -> CosmoLayer -> CosmoLayer)\n"
+            "variable (h : forall layer, psiIterate 6 layer = layer)\n"
+            "theorem six_step_periodic (layer : CosmoLayer) :\n"
+            "    psiIterate 6 layer = layer := by exact h layer\n"
+            "end\n"
+            "end Cosmovirus\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_formal_target(
+                "COSMO-D-001",
+                "cosmovirus.lean",
+                anchor,
+                source,
+            )
+
     def test_formal_target_must_enter_protected_lean_compile_closure(self) -> None:
         namespace = self.load_validator_namespace()
         validate_formal_target = cast(
@@ -730,6 +771,32 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             "        validate_e8_root_system(())\n"
             "    def _callTestMethod(self, method):\n"
             "        return None\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                source,
+            )
+
+    def test_regression_rejects_inherited_dispatch_override(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        source = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class NoDispatch(unittest.TestCase):\n"
+            "    def _callTestMethod(self, method) -> None:\n"
+            "        return None\n"
+            "class RegressionEvidence(NoDispatch):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        validate_e8_root_system(())\n"
         )
         with self.assertRaises(SystemExit):
             validate_connection(
@@ -1106,6 +1173,43 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "COSMO-D-003", "cosmo_core/e8.py",
                 "def validate_e8_root_system", "tests/test_regression.py",
                 "test_required_regression", disabled_by_false_literal_comparison,
+            )
+
+        rebound_at_module_scope = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "globals().update({\n"
+            "    'validate_e8_root_system': lambda *_args: None\n"
+            "})\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        validate_e8_root_system(())\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                rebound_at_module_scope,
+            )
+
+        short_circuited_call = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        _unused = False and validate_e8_root_system(())\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                short_circuited_call,
             )
 
         rebound_by_setup = (
@@ -1612,6 +1716,13 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 claim_classes,
             )
 
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                "COSMO-D-011: Spin(8) triality causes HPV16 capsid assembly.",
+                claim_classes,
+            )
+
         governed = (
             "COSMO-D-011 records that Spin(8) triality causes HPV16 "
             "capsid assembly only as a claim subject to its ledger class."
@@ -1817,6 +1928,27 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "sample.md",
                 "COSMO-D-012\n============\n"
                 "Spin(8) triality causes HPV16 capsid assembly.\n",
+                claim_classes,
+            )
+
+    def test_public_blockquote_paragraphs_do_not_share_claim_scope(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    "> COSMO-D-011\n"
+                    ">\n"
+                    "> Spin(8) triality causes HPV16 capsid assembly.\n"
+                ),
                 claim_classes,
             )
 
