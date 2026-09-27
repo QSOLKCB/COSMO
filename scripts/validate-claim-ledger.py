@@ -2911,12 +2911,13 @@ def validate_provenance(
                     f"{claim_id} provenance path {path_text!r} unreadable: {exc}"
                 )
         else:
-            text = provenance_snapshots.get(path_text)
-            if text is None:
+            snapshot_text = provenance_snapshots.get(path_text)
+            if snapshot_text is None:
                 fail(
                     f"{claim_id} provenance path {path_text!r} was not "
                     "captured before evidence execution"
                 )
+            text = cast(str, snapshot_text)
         if evidence_class == "FORMAL":
             validate_formal_provenance_target(
                 claim_id,
