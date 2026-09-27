@@ -5729,6 +5729,7 @@ def _latex_macro_definition_records(
             break
         command = match.group(0)
         index = _latex_skip_space(text, match.end())
+        macro_name: str | None = None
 
         if command.startswith("\\def"):
             name_match = re.match(r"\\[A-Za-z@]+", text[index:])
@@ -5770,7 +5771,6 @@ def _latex_macro_definition_records(
             cursor = body_end
             continue
 
-        macro_name: str | None = None
         if index < len(text) and text[index] == "{":
             name_end = _latex_braced_end(text, index)
             if name_end is None:
