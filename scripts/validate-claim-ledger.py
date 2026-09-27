@@ -10,8 +10,10 @@ from html.parser import HTMLParser
 import json
 import re
 import runpy
+import secrets
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Never, cast
@@ -2706,7 +2708,14 @@ def _fixture_mutates_binding(
             isinstance(statement, ast.FunctionDef)
             and statement.name in module_fixture_names
         ):
-            if _method_mutates_binding(statement, binding):
+            if (
+                _method_mutates_binding(statement, binding)
+                or _called_helpers_mutate_binding(
+                    regression_tree,
+                    statement,
+                    binding,
+                )
+            ):
                 return True
 
         if not isinstance(statement, ast.ClassDef) or statement.name != class_name:
@@ -2715,7 +2724,14 @@ def _fixture_mutates_binding(
             if (
                 isinstance(member, ast.FunctionDef)
                 and member.name in class_fixture_names
-                and _method_mutates_binding(member, binding)
+                and (
+                    _method_mutates_binding(member, binding)
+                    or _called_helpers_mutate_binding(
+                        regression_tree,
+                        member,
+                        binding,
+                    )
+                )
             ):
                 return True
     return False
@@ -2743,6 +2759,18 @@ def _simple_attribute_path(expression: ast.expr) -> str | None:
     return None
 
 
+def _reviewed_expression_signature(expression: ast.expr) -> str | None:
+    path = _simple_attribute_path(expression)
+    if path is not None:
+        return path
+    if isinstance(expression, ast.Constant) and isinstance(
+        expression.value,
+        (int, str),
+    ):
+        return repr(expression.value)
+    return None
+
+
 def _assert_equal_pair(statement: ast.stmt) -> frozenset[str] | None:
     if not isinstance(statement, ast.Expr):
         return None
@@ -2754,8 +2782,8 @@ def _assert_equal_pair(statement: ast.stmt) -> frozenset[str] | None:
         or len(call.args) < 2
     ):
         return None
-    left = _simple_attribute_path(call.args[0])
-    right = _simple_attribute_path(call.args[1])
+    left = _reviewed_expression_signature(call.args[0])
+    right = _reviewed_expression_signature(call.args[1])
     if left is None or right is None:
         return None
     return frozenset({left, right})
@@ -3067,6 +3095,126 @@ def _reachable_assignment_from_call(
     return False
 
 
+def _is_d003_norm_assertion(statement: ast.stmt) -> bool:
+    if not isinstance(statement, ast.Expr):
+        return False
+    call = statement.value
+    if (
+        not isinstance(call, ast.Call)
+        or not isinstance(call.func, ast.Attribute)
+        or call.func.attr != "assertTrue"
+        or len(call.args) != 1
+    ):
+        return False
+    expression = call.args[0]
+    if (
+        not isinstance(expression, ast.Call)
+        or not isinstance(expression.func, ast.Name)
+        or expression.func.id != "all"
+        or len(expression.args) != 1
+        or not isinstance(expression.args[0], ast.GeneratorExp)
+    ):
+        return False
+    generator = expression.args[0]
+    comparison = generator.elt
+    if (
+        len(generator.generators) != 1
+        or not isinstance(comparison, ast.Compare)
+        or len(comparison.ops) != 1
+        or not isinstance(comparison.ops[0], ast.Eq)
+        or len(comparison.comparators) != 1
+    ):
+        return False
+    left = comparison.left
+    right = comparison.comparators[0]
+    return (
+        isinstance(left, ast.Call)
+        and isinstance(left.func, ast.Name)
+        and left.func.id == "norm_squared"
+        and len(left.args) == 1
+        and isinstance(left.args[0], ast.Name)
+        and left.args[0].id == "root"
+        and isinstance(right, ast.Call)
+        and isinstance(right.func, ast.Name)
+        and right.func.id == "Fraction"
+        and len(right.args) == 1
+        and isinstance(right.args[0], ast.Constant)
+        and right.args[0].value == 2
+        and isinstance(generator.generators[0].target, ast.Name)
+        and generator.generators[0].target.id == "root"
+        and isinstance(generator.generators[0].iter, ast.Name)
+        and generator.generators[0].iter.id == "roots"
+    )
+
+
+def _reachable_has_d003_norm_assertion(
+    statements: list[ast.stmt],
+    module_constants: dict[str, bool],
+) -> bool:
+    for statement in statements:
+        if isinstance(statement, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+            return False
+        if _is_d003_norm_assertion(statement):
+            return True
+        if isinstance(statement, ast.If):
+            condition = _static_boolean_value(statement.test, module_constants)
+            branches = (
+                [statement.body] if condition is True
+                else [statement.orelse] if condition is False
+                else [statement.body, statement.orelse]
+            )
+            if any(
+                _reachable_has_d003_norm_assertion(branch, module_constants)
+                for branch in branches
+            ):
+                return True
+        elif isinstance(statement, ast.While):
+            condition = _static_boolean_value(statement.test, module_constants)
+            if condition is not False and _reachable_has_d003_norm_assertion(
+                statement.body,
+                module_constants,
+            ):
+                return True
+            if condition is not True and _reachable_has_d003_norm_assertion(
+                statement.orelse,
+                module_constants,
+            ):
+                return True
+        elif isinstance(statement, (ast.For, ast.AsyncFor)):
+            if (
+                _static_iterable_has_items(statement.iter) is not False
+                and _reachable_has_d003_norm_assertion(
+                    statement.body,
+                    module_constants,
+                )
+            ):
+                return True
+            if _reachable_has_d003_norm_assertion(
+                statement.orelse,
+                module_constants,
+            ):
+                return True
+        elif isinstance(statement, (ast.With, ast.AsyncWith)):
+            if _reachable_has_d003_norm_assertion(
+                statement.body,
+                module_constants,
+            ):
+                return True
+        elif isinstance(statement, ast.Try):
+            groups = [
+                statement.body,
+                statement.orelse,
+                statement.finalbody,
+                *[handler.body for handler in statement.handlers],
+            ]
+            if any(
+                _reachable_has_d003_norm_assertion(group, module_constants)
+                for group in groups
+            ):
+                return True
+    return False
+
+
 def validate_reviewed_computational_regression_semantics(
     claim_id: str,
     method: ast.FunctionDef,
@@ -3074,6 +3222,45 @@ def validate_reviewed_computational_regression_semantics(
     imported_binding: str,
 ) -> None:
     """Require reviewed result assertions for claim-specific computational evidence."""
+    if claim_id == "COSMO-D-003":
+        if not _reachable_assignment_from_call(
+            method.body,
+            "report",
+            imported_binding,
+            module_constants,
+        ):
+            fail(
+                f"{claim_id} regression must bind report to the reviewed "
+                f"implementation return value {imported_binding}(...)"
+            )
+        required_pairs = {
+            frozenset({"report.root_count", "240"}),
+            frozenset({"report.integer_root_count", "112"}),
+            frozenset({"report.half_integer_root_count", "128"}),
+            frozenset({"report.rank", "8"}),
+            frozenset({"report.sha256", "E8_ROOT_TABLE_SHA256"}),
+        }
+        observed_pairs = _reachable_assert_equal_pairs(
+            method.body,
+            module_constants,
+        )
+        missing = required_pairs - observed_pairs
+        if missing:
+            rendered = sorted(sorted(pair) for pair in missing)
+            fail(
+                f"{claim_id} regression must verify reviewed E8 report fields; "
+                f"missing assertEqual pairs {rendered}"
+            )
+        if not _reachable_has_d003_norm_assertion(
+            method.body,
+            module_constants,
+        ):
+            fail(
+                f"{claim_id} regression must verify every canonical root "
+                "has squared norm Fraction(2)"
+            )
+        return
+
     if claim_id != "COSMO-D-014":
         return
 
@@ -3280,6 +3467,8 @@ def validate_computational_regression_target(
     anchor: str,
     path: Path,
     text: str,
+    implementation_path: str | None = None,
+    implementation_text: str | None = None,
 ) -> None:
     """Execute the exact unittest method claimed as computational evidence."""
     class_name, _method = locate_unittest_regression(
@@ -3288,23 +3477,75 @@ def validate_computational_regression_target(
         anchor,
         text,
     )
-    runner = r'''
-import sys
-import unittest
+    implementation_module = (
+        _implementation_module_name(implementation_path)
+        if implementation_path is not None
+        else None
+    )
+    payload = json.dumps(
+        {
+            "regression_source": text,
+            "implementation_source": implementation_text,
+            "implementation_module": implementation_module,
+            "implementation_filename": implementation_path,
+        }
+    )
 
-source = sys.stdin.read()
+    with tempfile.TemporaryDirectory() as temporary:
+        completion_path = Path(temporary) / "completion"
+        completion_nonce = secrets.token_hex(32)
+        runner = f'''
+import importlib
+import json
+import sys
+import types
+import unittest
+from pathlib import Path
+
+payload = json.loads(sys.stdin.read())
+source = payload["regression_source"]
+implementation_source = payload.get("implementation_source")
+implementation_module = payload.get("implementation_module")
+implementation_filename = payload.get("implementation_filename")
 class_name, anchor, filename, run_name = sys.argv[1:5]
-namespace = {
+completion_path = Path({str(Path("/tmp/placeholder"))!r})
+completion_path = Path({""!r})
+'''
+        runner = runner.replace(
+            "completion_path = Path('')",
+            f"completion_path = Path({str(completion_path)!r})",
+        ) + f'''
+completion_nonce = {completion_nonce!r}
+
+if implementation_source is not None and implementation_module is not None:
+    package_name, _, child_name = implementation_module.rpartition(".")
+    package = importlib.import_module(package_name)
+    frozen_module = types.ModuleType(implementation_module)
+    frozen_module.__file__ = implementation_filename
+    frozen_module.__package__ = package_name
+    sys.modules[implementation_module] = frozen_module
+    code = compile(
+        implementation_source,
+        implementation_filename or implementation_module,
+        "exec",
+    )
+    exec(code, frozen_module.__dict__)
+    setattr(package, child_name, frozen_module)
+    for name, value in frozen_module.__dict__.items():
+        if not name.startswith("_") and hasattr(package, name):
+            setattr(package, name, value)
+
+namespace = {{
     "__name__": run_name,
     "__file__": filename,
     "__package__": None,
     "__cached__": None,
-}
+}}
 try:
     code = compile(source, filename, "exec")
     exec(code, namespace)
 except BaseException as exc:
-    print(f"load failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+    print(f"load failed: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
     raise SystemExit(20)
 
 case_type = namespace.get(class_name)
@@ -3317,7 +3558,7 @@ result = unittest.TestResult()
 unittest.TestCase.run(case, result)
 
 if result.testsRun != 1:
-    print(f"testsRun={result.testsRun}", file=sys.stderr)
+    print(f"testsRun={{result.testsRun}}", file=sys.stderr)
     raise SystemExit(22)
 if result.skipped:
     print("regression skipped", file=sys.stderr)
@@ -3331,35 +3572,31 @@ if result.failures or result.errors or result.unexpectedSuccesses:
     print(rendered, file=sys.stderr)
     raise SystemExit(25)
 
-print("__COSMO_REGRESSION_OK__")
+completion_path.write_text(completion_nonce, encoding="ascii")
 '''
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            runner,
-            class_name,
-            anchor,
-            str(path),
-            f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
-        ],
-        cwd=ROOT,
-        input=text,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    output_lines = [
-        line.strip()
-        for line in completed.stdout.splitlines()
-        if line.strip()
-    ]
-    if (
-        completed.returncode != 0
-        or not output_lines
-        or output_lines[-1] != "__COSMO_REGRESSION_OK__"
-    ):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                runner,
+                class_name,
+                anchor,
+                str(path),
+                f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
+            ],
+            cwd=ROOT,
+            input=payload,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        completion_ok = (
+            completion_path.is_file()
+            and completion_path.read_text(encoding="ascii") == completion_nonce
+        )
+
+    if completed.returncode != 0 or not completion_ok:
         detail_lines = [
             line.strip()
             for line in completed.stderr.splitlines()
@@ -3373,6 +3610,8 @@ print("__COSMO_REGRESSION_OK__")
                 f"{claim_id} cannot load regression evidence {path_text}: "
                 f"{detail}"
             )
+        if completed.returncode == 0 and not completion_ok:
+            detail = "runner completion was not authenticated by parent"
         fail(
             f"{claim_id} regression evidence {path_text}:{anchor} did not pass "
             f"in isolated execution: {detail}"
@@ -3423,8 +3662,8 @@ def validate_provenance(
 
     allowed_roles = ALLOWED_PROVENANCE_ROLES[evidence_class]
     roles: set[str] = set()
-    implementation_evidence: tuple[str, str] | None = None
-    regression_evidence: tuple[str, str, str] | None = None
+    implementation_evidence: tuple[str, str, str] | None = None
+    regression_evidence: tuple[str, str, str, Path] | None = None
     for index, item in enumerate(entries):
         if not isinstance(item, dict):
             fail(f"{claim_id} provenance[{index}] must be an object")
@@ -3489,16 +3728,9 @@ def validate_provenance(
                     anchor,
                     text,
                 )
-                implementation_evidence = (path_text, anchor)
+                implementation_evidence = (path_text, anchor, text)
             if evidence_class == "COMPUTATIONAL" and role == "regression":
-                validate_computational_regression_target(
-                    claim_id,
-                    path_text,
-                    anchor,
-                    path,
-                    text,
-                )
-                regression_evidence = (path_text, anchor, text)
+                regression_evidence = (path_text, anchor, text, path)
 
     if evidence_class == "FORMAL" and "kernel_checked_theorem" not in roles:
         fail(f"{claim_id} FORMAL claim requires kernel-checked theorem evidence")
@@ -3520,6 +3752,15 @@ def validate_provenance(
             regression_evidence[0],
             regression_evidence[1],
             regression_evidence[2],
+        )
+        validate_computational_regression_target(
+            claim_id,
+            regression_evidence[0],
+            regression_evidence[1],
+            regression_evidence[3],
+            regression_evidence[2],
+            implementation_evidence[0],
+            implementation_evidence[2],
         )
     return roles
 
@@ -4825,6 +5066,70 @@ def discover_public_governed_paths(root: Path = ROOT) -> tuple[str, ...]:
     return paths
 
 
+def expand_latex_transclusions(
+    path_text: str,
+    text: str,
+    root: Path,
+    seen: set[str] | None = None,
+) -> str:
+    """Expand repository-local LaTeX input/include dependencies deterministically."""
+    if seen is None:
+        seen = set()
+    if path_text in seen:
+        fail(f"LaTeX transclusion cycle detected at {path_text!r}")
+    seen = {*seen, path_text}
+    parent = Path(path_text).parent
+
+    pattern = re.compile(r"\\(?:input|include)\s*\{([^{}\n]+)\}")
+
+    def replace(match: re.Match[str]) -> str:
+        raw = match.group(1).strip()
+        relative = parent / raw
+        candidates = [relative]
+        if relative.suffix == "":
+            candidates.append(relative.with_suffix(".tex"))
+
+        target: Path | None = None
+        target_text: str | None = None
+        for candidate in candidates:
+            if candidate.is_absolute() or ".." in candidate.parts:
+                continue
+            resolved = (root / candidate).resolve()
+            try:
+                resolved.relative_to(root.resolve())
+            except ValueError:
+                continue
+            if resolved.is_file():
+                target = candidate
+                try:
+                    target_text = resolved.read_text(encoding="utf-8")
+                except (OSError, UnicodeError) as exc:
+                    fail(
+                        f"cannot read LaTeX transclusion {candidate.as_posix()!r}: {exc}"
+                    )
+                break
+
+        if target is None or target_text is None:
+            fail(
+                f"cannot resolve LaTeX transclusion {raw!r} "
+                f"from {path_text!r}"
+            )
+        return expand_latex_transclusions(
+            target.as_posix(),
+            target_text,
+            root,
+            seen,
+        )
+
+    previous = text
+    for _ in range(32):
+        expanded = pattern.sub(replace, previous)
+        if expanded == previous:
+            return expanded
+        previous = expanded
+    fail(f"too many nested LaTeX transclusions from {path_text!r}")
+
+
 def snapshot_public_documents(
     root: Path = ROOT,
 ) -> dict[str, str]:
@@ -4833,9 +5138,16 @@ def snapshot_public_documents(
     for path_text in discover_public_governed_paths(root):
         path = root / path_text
         try:
-            documents[path_text] = path.read_text(encoding="utf-8")
+            document_text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
             fail(f"cannot read governed public document {path_text}: {exc}")
+        if path.suffix.lower() == ".tex":
+            document_text = expand_latex_transclusions(
+                path_text,
+                document_text,
+                root,
+            )
+        documents[path_text] = document_text
     return documents
 
 
