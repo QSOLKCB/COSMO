@@ -1089,7 +1089,11 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
 
         original = cosmo_core.recover_cube_storage
         try:
-            cosmo_core.recover_cube_storage = lambda *_args, **_kwargs: None
+            setattr(
+                cosmo_core,
+                "recover_cube_storage",
+                lambda *_args, **_kwargs: None,
+            )
             source = (
                 "import unittest\n"
                 "from cosmo_core import recover_cube_storage\n"
@@ -1111,7 +1115,7 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                     source,
                 )
         finally:
-            cosmo_core.recover_cube_storage = original
+            setattr(cosmo_core, "recover_cube_storage", original)
 
     def test_async_regression_methods_are_rejected(self) -> None:
         namespace = self.load_validator_namespace()
