@@ -961,6 +961,10 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             Callable[[str, str, str, str], None],
             namespace["validate_computational_implementation_target"],
         )
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
         with self.assertRaises(SystemExit):
             validate_implementation(
                 "COSMO-D-003",
