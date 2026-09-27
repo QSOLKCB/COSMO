@@ -5191,7 +5191,6 @@ def strip_markdown_link_destinations(text: str) -> str:
 
 
 class _VisibleHTMLTextParser(HTMLParser):
-class _VisibleHTMLTextParser(HTMLParser):
     """Collect rendered inline-HTML text while discarding hidden/raw subtrees."""
 
     BLOCK_TAGS = frozenset(
