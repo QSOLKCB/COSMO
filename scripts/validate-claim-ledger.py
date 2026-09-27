@@ -2805,20 +2805,19 @@ def _reachable_assert_equal_pairs(
 
         if isinstance(statement, ast.If):
             condition = _static_boolean_value(statement.test, module_constants)
-            if condition is True:
+            if condition is not None:
+                branch = statement.body if condition else statement.orelse
                 observed.update(
                     _reachable_assert_equal_pairs(
-                        statement.body,
+                        branch,
                         module_constants,
                     )
                 )
-            elif condition is False:
-                observed.update(
-                    _reachable_assert_equal_pairs(
-                        statement.orelse,
-                        module_constants,
-                    )
-                )
+                if _static_selected_exit_kind(
+                    branch,
+                    module_constants,
+                ) is not None:
+                    break
             else:
                 observed.update(
                     _reachable_assert_equal_pairs(
@@ -5104,7 +5103,7 @@ def expand_latex_transclusions(
             if resolved.is_file():
                 target = candidate
                 try:
-                    target_text = resolved.read_text(encoding="utf-8")
+                    target_text = resolved.read_bytes().decode("utf-8")
                 except (OSError, UnicodeError) as exc:
                     fail(
                         f"cannot read LaTeX transclusion {candidate.as_posix()!r}: {exc}"
@@ -5140,7 +5139,7 @@ def snapshot_public_documents(
     for path_text in discover_public_governed_paths(root):
         path = root / path_text
         try:
-            document_text = path.read_text(encoding="utf-8")
+            document_text = path.read_bytes().decode("utf-8")
         except (OSError, UnicodeError) as exc:
             fail(f"cannot read governed public document {path_text}: {exc}")
         if path.suffix.lower() == ".tex":
@@ -5165,6 +5164,19 @@ def validate_public_documents(
             path_text,
             documents[path_text],
             claim_classes,
+        )
+
+
+def validate_canonical_index_text(
+    index_text: str,
+    ledger: dict[str, Any],
+) -> None:
+    """Require the exact canonical LF rendering, including line endings."""
+    expected_index = render_index(ledger)
+    if index_text != expected_index:
+        fail(
+            "CLAIM-LEDGER.md differs from canonical JSON rendering; "
+            "regenerate it from claims/claim-ledger.json"
         )
 
 
@@ -5335,12 +5347,7 @@ def validate() -> None:
     validate_reviewed_claim_inventory(claim_ids)
     validate_public_documents(claim_classes, public_documents)
 
-    expected_index = render_index(ledger)
-    if index_text != expected_index:
-        fail(
-            "CLAIM-LEDGER.md differs from canonical JSON rendering; "
-            "regenerate it from claims/claim-ledger.json"
-        )
+    validate_canonical_index_text(index_text, ledger)
 
     print(
         f"claim ledger valid: {len(claims)} claims, "
