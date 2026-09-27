@@ -517,7 +517,7 @@ PUBLIC_DOMAIN_PATTERNS: dict[str, re.Pattern[str]] = {
         re.IGNORECASE,
     ),
     "biomedicine": re.compile(
-        r"\b(?:HPV16|HPV|capsid|E6|E7|p16)\b",
+        r"\b(?:HPV16|HPV|capsid|p16)\b",
         re.IGNORECASE,
     ),
     "materials_science": re.compile(
@@ -553,6 +553,13 @@ PUBLIC_ENTITY_PATTERNS: dict[str, re.Pattern[str]] = {
     "cosmology": re.compile(r"\b(?:cosmic|cosmology)\b", re.IGNORECASE),
     "ouroboros": re.compile(r"\bOuroboros\b", re.IGNORECASE),
 }
+PUBLIC_BIOMEDICAL_E6_E7_RE = re.compile(r"\bE[67]\b", re.IGNORECASE)
+PUBLIC_BIOMEDICAL_E6_E7_CONTEXT_RE = re.compile(
+    r"\b(?:HPV16?|viral|virolog(?:y|ical)|oncoproteins?|proteins?|"
+    r"expression|transcription|p53|pRB|RB1|cervical|capsid)\b",
+    re.IGNORECASE,
+)
+
 PUBLIC_ASSERTION_RE = re.compile(
     r"\b(?:causes?|caused|drives?|driven|produces?|produced|"
     r"determines?|determined|explains?|explained|proves?|proved|"
@@ -560,6 +567,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"validates?|validated|predicts?|predicted|induces?|induced|"
     r"triggers?|triggered|promotes?|promoted|mediates?|mediated|"
     r"enables?|enabled|activates?|activated|"
+    r"inhibits?|inhibited|inhibiting|"
     r"controls?\s+(?=(?:(?:the|an?|this|that)\s+)?"
     r"(?:(?:[A-Za-z][A-Za-z0-9_-]*|of)\s+){0,5}"
     r"(?:HPV16|HPV|capsid|E6|E7|p16|SiS2|SiS_2|silicon\s+disulfide|"
@@ -575,7 +583,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     re.IGNORECASE,
 )
 PUBLIC_NEGATION_RE = re.compile(
-    r"\b(?:not|no|never|cannot|can't|does\s+not|do\s+not|"
+    r"\b(?:not|never|cannot|can't|does\s+not|do\s+not|"
     r"is\s+not|are\s+not|without|fails?\s+to)\b",
     re.IGNORECASE,
 )
@@ -1473,6 +1481,41 @@ def _reachable_statements_call_function(
                 return True
             continue
 
+        if isinstance(statement, ast.Try):
+            if _reachable_statements_call_function(
+                statement.body,
+                function_name,
+                module_constants,
+            ):
+                return True
+            body_exit = _static_selected_exit_kind(
+                statement.body,
+                module_constants,
+            )
+            if body_exit not in {"return", "break", "continue"}:
+                for handler in statement.handlers:
+                    if _reachable_statements_call_function(
+                        handler.body,
+                        function_name,
+                        module_constants,
+                    ):
+                        return True
+                if _reachable_statements_call_function(
+                    statement.orelse,
+                    function_name,
+                    module_constants,
+                ):
+                    return True
+            if _reachable_statements_call_function(
+                statement.finalbody,
+                function_name,
+                module_constants,
+            ):
+                return True
+            if body_exit in {"return", "break", "continue"}:
+                return False
+            continue
+
         if _statement_calls_function(statement, function_name):
             return True
     return False
@@ -1712,6 +1755,11 @@ def validate_computational_implementation_target(
         )
 
     definition = matches[0]
+    if definition.decorator_list:
+        fail(
+            f"{claim_id} implementation export {function_name!r} must be "
+            f"undecorated so the reviewed function body is the imported callable"
+        )
     definition_index = tree.body.index(definition)
     mutation_finder = _BindingMutationFinder(function_name)
     for statement in tree.body[definition_index + 1:]:
@@ -2196,11 +2244,17 @@ def public_claim_semantics() -> dict[str, tuple[set[str], set[str]]]:
 
 def paragraph_domains(text: str) -> set[str]:
     """Return controlled semantic domains named in one public paragraph."""
-    return {
+    domains = {
         domain
         for domain, pattern in PUBLIC_DOMAIN_PATTERNS.items()
         if pattern.search(text) is not None
     }
+    if (
+        PUBLIC_BIOMEDICAL_E6_E7_RE.search(text) is not None
+        and PUBLIC_BIOMEDICAL_E6_E7_CONTEXT_RE.search(text) is not None
+    ):
+        domains.add("biomedicine")
+    return domains
 
 
 def _public_left_clause_boundary(text: str, predicate_start: int) -> int:
@@ -2356,10 +2410,41 @@ def strip_markdown_link_destinations(text: str) -> str:
 class _VisibleHTMLTextParser(HTMLParser):
     """Collect rendered inline-HTML text while discarding tags/attributes."""
 
+    BLOCK_TAGS = frozenset(
+        {
+            "address",
+            "article",
+            "aside",
+            "blockquote",
+            "div",
+            "footer",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "header",
+            "li",
+            "main",
+            "nav",
+            "ol",
+            "p",
+            "section",
+            "table",
+            "tr",
+            "ul",
+        }
+    )
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.raw_text_depth = 0
+
+    def _append_block_boundary(self) -> None:
+        if not self.parts or not self.parts[-1].endswith("\n\n"):
+            self.parts.append("\n\n")
 
     def handle_starttag(
         self,
@@ -2367,12 +2452,20 @@ class _VisibleHTMLTextParser(HTMLParser):
         attrs: list[tuple[str, str | None]],
     ) -> None:
         del attrs
-        if tag.lower() in {"script", "style"}:
+        normalized = tag.lower()
+        if normalized in {"script", "style"}:
             self.raw_text_depth += 1
+            return
+        if self.raw_text_depth == 0 and normalized in self.BLOCK_TAGS:
+            self._append_block_boundary()
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in {"script", "style"} and self.raw_text_depth:
+        normalized = tag.lower()
+        if normalized in {"script", "style"} and self.raw_text_depth:
             self.raw_text_depth -= 1
+            return
+        if self.raw_text_depth == 0 and normalized in self.BLOCK_TAGS:
+            self._append_block_boundary()
 
     def handle_data(self, data: str) -> None:
         if self.raw_text_depth == 0:
@@ -2500,7 +2593,7 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
     """Remove non-rendered comments/code before public-claim scanning."""
     text = re.sub(
         r"<!--[\s\S]*?(?:-->|$)",
-        lambda match: _blank_non_newlines(match.group(0)),
+        "",
         text,
     )
     if Path(path_text).suffix.lower() in {".md", ".markdown"}:
@@ -2517,6 +2610,11 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
             text,
         )
     text = strip_latex_disabled_branches(text)
+    text = re.sub(
+        r"\\label\s*\{[^{}\n]*\}",
+        lambda match: _blank_non_newlines(match.group(0)),
+        text,
+    )
 
     lines: list[str] = []
     for line in text.splitlines(keepends=True):
@@ -2642,7 +2740,7 @@ def validate_reviewed_claim_record(
     """Prevent any field of a reviewed Phase D claim from silently drifting."""
     expected = PINNED_REVIEWED_CLAIM_RECORDS.get(claim_id)
     if expected is None:
-        return
+        fail(f"{claim_id} lacks a complete reviewed claim-record binding")
     if claim != expected:
         fail(f"{claim_id} differs from its complete reviewed claim record")
 
