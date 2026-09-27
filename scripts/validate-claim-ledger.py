@@ -2124,6 +2124,7 @@ class _BindingMutationFinder(ast.NodeVisitor):
 
     def __init__(self, binding: str) -> None:
         self.binding = binding
+        self.aliases = {binding}
         self.found = False
 
     def _target_mentions_binding(self, target: ast.expr) -> bool:
@@ -2152,7 +2153,7 @@ class _BindingMutationFinder(ast.NodeVisitor):
             and func.id in {"setattr", "delattr"}
             and node.args
             and isinstance(node.args[0], ast.Name)
-            and node.args[0].id == self.binding
+            and node.args[0].id in self.aliases
         ):
             self.found = True
             return
@@ -2188,13 +2189,35 @@ class _BindingMutationFinder(ast.NodeVisitor):
         if any(self._target_mentions_binding(target) for target in node.targets):
             self.found = True
             return
-        self.generic_visit(node)
+
+        value_is_alias = (
+            isinstance(node.value, ast.Name)
+            and node.value.id in self.aliases
+        )
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                if value_is_alias:
+                    self.aliases.add(target.id)
+                else:
+                    self.aliases.discard(target.id)
+
+        self.visit(node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         if self._target_mentions_binding(node.target):
             self.found = True
             return
-        self.generic_visit(node)
+        if isinstance(node.target, ast.Name):
+            value_is_alias = (
+                isinstance(node.value, ast.Name)
+                and node.value.id in self.aliases
+            )
+            if value_is_alias:
+                self.aliases.add(node.target.id)
+            else:
+                self.aliases.discard(node.target.id)
+        if node.value is not None:
+            self.visit(node.value)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
         if self._target_mentions_binding(node.target):
@@ -3004,6 +3027,31 @@ def public_assertion_clause(
     return text[left_boundary:right_boundary]
 
 
+def public_assertion_antecedent(
+    text: str,
+    assertion: re.Match[str],
+    clause: str,
+) -> str:
+    """Return the immediately preceding sentence for a simple pronoun subject."""
+    if re.match(
+        r"^\s*(?:it|this|they|these|those)\b",
+        clause,
+        re.IGNORECASE,
+    ) is None:
+        return ""
+
+    left_boundary = _public_left_clause_boundary(text, assertion.start())
+    prefix = text[:left_boundary].rstrip()
+    prefix = re.sub(r"[.!?]+\s*$", "", prefix)
+    if not prefix:
+        return ""
+
+    previous_boundary = 0
+    for boundary in re.finditer(r"[.!?]", prefix):
+        previous_boundary = boundary.end()
+    return prefix[previous_boundary:].strip()
+
+
 def public_assertion_binding_scope(
     text: str,
     assertion: re.Match[str],
@@ -3279,6 +3327,11 @@ def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
     suffix = Path(path_text).suffix.lower()
     if suffix == ".tex":
         text = re.sub(r"\\par\b", "\n\n", text)
+        text = re.sub(
+            r"\\item(?:\s*\[[^\]\n]*\])?\s*",
+            "\n\n",
+            text,
+        )
     if suffix in {".md", ".markdown"}:
         text = re.sub(
             r"(?m)^ {0,3}>[ \t]*$",
@@ -3552,7 +3605,17 @@ def validate_public_claim_text(
 
         for assertion in PUBLIC_ASSERTION_RE.finditer(compact):
             clause = public_assertion_clause(compact, assertion)
-            local_domains = paragraph_domains(clause)
+            antecedent = public_assertion_antecedent(
+                compact,
+                assertion,
+                clause,
+            )
+            semantic_clause = (
+                (antecedent + " " + clause).strip()
+                if antecedent
+                else clause
+            )
+            local_domains = paragraph_domains(semantic_clause)
             if len(local_domains) < 2:
                 continue
             if public_assertion_is_negated(compact, assertion):
@@ -3573,7 +3636,7 @@ def validate_public_claim_text(
                     f"references unknown claim IDs {sorted(unknown)}"
                 )
             semantics = public_claim_semantics()
-            local_entities = public_entities(clause)
+            local_entities = public_entities(semantic_clause)
             governing_ids: set[str] = set()
             for claim_id in present_ids:
                 evidence_class = claim_classes[claim_id]
