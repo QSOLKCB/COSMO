@@ -607,6 +607,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"contributes?\s+to|corresponds?\s+to|maps?\s+to|"
     r"(?:is|are|was|were)\s+necessary\s+for|"
     r"depend(?:s|ed|ing)?\s+on|"
+    r"requir(?:e|es|ed|ing)|"
     r"is\s+(?:an?\s+|the\s+)?mechanism\s+(?:for|of|behind)|"
     r"mechanism\s+(?:connects?|links?|drives?|causes?)|"
     r"is\s+responsible\s+for)\b",
@@ -1243,6 +1244,19 @@ def lean_namespace_variable_names(text: str) -> set[str]:
     return names
 
 
+def lean_namespace_included_names(text: str) -> set[str]:
+    """Return names explicitly included as direct namespace theorem parameters."""
+    names: set[str] = set()
+    for line in text.splitlines():
+        match = re.match(r"^\s*include\s+(.+?)\s*$", line)
+        if match is None:
+            continue
+        for name in match.group(1).split():
+            if re.fullmatch(r"[^\s:(){}\[\],]+", name):
+                names.add(name)
+    return names
+
+
 def validate_formal_provenance_target(
     claim_id: str,
     path_text: str,
@@ -1274,6 +1288,13 @@ def validate_formal_provenance_target(
         declaration_text,
         "Cosmovirus",
     )
+    included_dependencies = lean_namespace_included_names(scoped_text)
+    if included_dependencies:
+        fail(
+            f"{claim_id} FORMAL provenance depends on namespace-level "
+            f"included hypotheses {sorted(included_dependencies)}"
+        )
+
     shadowed = (
         lean_namespace_variable_names(scoped_text)
         & PINNED_FORMAL_AUTHORITY_IDENTIFIERS.get(claim_id, frozenset())
@@ -1351,6 +1372,16 @@ class _UnittestDispatchMutationFinder(ast.NodeVisitor):
         if (
             isinstance(node.func, ast.Name)
             and node.func.id in {"setattr", "delattr"}
+            and len(node.args) >= 2
+            and _is_unittest_testcase_expression(node.args[0])
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in UNITTEST_DISPATCH_HOOKS
+        ):
+            self.found = True
+            return
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"__setattr__", "__delattr__"}
             and len(node.args) >= 2
             and _is_unittest_testcase_expression(node.args[0])
             and isinstance(node.args[1], ast.Constant)
@@ -2803,10 +2834,43 @@ def validate_computational_regression_target(
         )
 
 
+def snapshot_provenance_files(claims: list[object]) -> dict[str, str]:
+    """Freeze every ledger provenance file before executable evidence runs."""
+    snapshots: dict[str, str] = {}
+    for claim_index, claim in enumerate(claims):
+        if not isinstance(claim, dict):
+            fail(f"claim[{claim_index}] must be an object")
+        claim_id = require_inline_string(
+            claim.get("id"),
+            f"claim[{claim_index}] id",
+        )
+        entries = claim.get("provenance")
+        if not isinstance(entries, list) or not entries:
+            fail(f"{claim_id} must have repository provenance")
+        for entry_index, item in enumerate(entries):
+            if not isinstance(item, dict):
+                fail(f"{claim_id} provenance[{entry_index}] must be an object")
+            path_text = require_inline_string(
+                item.get("path"),
+                f"{claim_id} provenance path",
+            )
+            if path_text in snapshots:
+                continue
+            path = validate_repository_path(path_text, claim_id)
+            try:
+                snapshots[path_text] = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                fail(
+                    f"{claim_id} provenance path {path_text!r} unreadable: {exc}"
+                )
+    return snapshots
+
+
 def validate_provenance(
     claim_id: str,
     evidence_class: str,
     entries: object,
+    provenance_snapshots: dict[str, str] | None = None,
 ) -> set[str]:
     """Validate repository evidence and enforce class-appropriate roles."""
     if not isinstance(entries, list) or not entries:
@@ -2839,10 +2903,20 @@ def validate_provenance(
         roles.add(role)
 
         path = validate_repository_path(path_text, claim_id)
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            fail(f"{claim_id} provenance path {path_text!r} unreadable: {exc}")
+        if provenance_snapshots is None:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                fail(
+                    f"{claim_id} provenance path {path_text!r} unreadable: {exc}"
+                )
+        else:
+            text = provenance_snapshots.get(path_text)
+            if text is None:
+                fail(
+                    f"{claim_id} provenance path {path_text!r} was not "
+                    "captured before evidence execution"
+                )
         if evidence_class == "FORMAL":
             validate_formal_provenance_target(
                 claim_id,
@@ -3273,8 +3347,8 @@ def public_assertion_antecedent(
     clause: str,
 ) -> str:
     """Return the immediately preceding sentence for a simple pronoun subject."""
-    if re.match(
-        r"^\s*(?:it|this|they|these|those)\b",
+    if re.search(
+        r"\b(?:it|this|they|them|these|those)\b",
         clause,
         re.IGNORECASE,
     ) is None:
@@ -3324,6 +3398,12 @@ def public_assertion_is_negated(
         predicate_prefix,
         flags=re.IGNORECASE,
     )
+    if re.search(
+        r"\bno\s+(?:evidence|basis|support)\s+that\b",
+        predicate_prefix,
+        re.IGNORECASE,
+    ) is not None:
+        return True
     predicate_prefix = re.sub(
         r"\bno\s+doubt(?:\s+that)?\b",
         "",
@@ -3489,7 +3569,11 @@ class _VisibleHTMLTextParser(HTMLParser):
             style_value,
             re.IGNORECASE,
         ) is not None
-        hidden_here = hidden_attribute or css_hidden
+        hidden_here = (
+            hidden_attribute
+            or css_hidden
+            or normalized == "template"
+        )
 
         if normalized in self.VOID_TAGS:
             if (
@@ -4076,6 +4160,10 @@ def validate() -> None:
     if not isinstance(sources, list) or not isinstance(claims, list):
         fail("sources and claims must be arrays")
 
+    provenance_snapshots = snapshot_provenance_files(
+        cast(list[object], claims)
+    )
+
     source_ids: set[str] = set()
     source_kinds: dict[str, str] = {}
     source_domains: dict[str, str] = {}
@@ -4161,6 +4249,7 @@ def validate() -> None:
             claim_id,
             evidence_class,
             claim.get("provenance"),
+            provenance_snapshots,
         )
 
         source_list = claim.get("sources")
