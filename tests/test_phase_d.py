@@ -1,3 +1,4 @@
+import ast
 import json
 import runpy
 from copy import deepcopy
@@ -4595,6 +4596,190 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "<p>Spin(8) triality causes<br>HPV16 capsid assembly.</p>",
                 {},
             )
+
+
+    def test_runtime_scanner_rejects_constructed_frame_introspection(self) -> None:
+        namespace = self.load_validator_namespace()
+        scanner = cast(
+            Callable[[ast.Module], str | None],
+            namespace["_forbidden_regression_runtime_primitive"],
+        )
+        tree = ast.parse(
+            'getattr(sys, "_" + "getframe")()\n'
+            'getattr(frame, "f_" + "back")\n'
+            'getattr(frame, "f_" + "locals")\n'
+            'getattr(os, "_" + "exit")(0)\n'
+        )
+        self.assertIsNotNone(scanner(tree))
+
+    def test_d003_helper_cannot_shadow_instance_assert_equal(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b3.py"
+        ).read_text(encoding="utf-8")
+        helper = (
+            "def install_assertion_bypass(case: object) -> None:\n"
+            '    setattr(case, "assertEqual", lambda *_args: None)\n\n'
+        )
+        source = helper + regression_text
+        method_marker = (
+            "    def test_root_system_report_has_rank_eight_and_norm_two(self) -> None:\n"
+        )
+        source = source.replace(
+            method_marker,
+            method_marker + "        install_assertion_bypass(self)\n",
+            1,
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "shadow protected unittest behavior",
+        ):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_phase_b3.py",
+                "test_root_system_report_has_rank_eight_and_norm_two",
+                source,
+            )
+
+    def test_markdown_quoted_fenced_code_is_not_public_prose(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        validate_public_claim_text(
+            "sample.md",
+            (
+                "> \`\`\`text\n"
+                "> Spin(8) triality causes HPV16 capsid assembly.\n"
+                "> \`\`\`\n"
+            ),
+            {},
+        )
+
+    def test_markdown_reference_definition_continuation_title_is_hidden(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        validate_public_claim_text(
+            "sample.md",
+            (
+                "[bg]: https://example.org\n"
+                '  "Spin(8) triality causes HPV16 capsid assembly."\n'
+            ),
+            {},
+        )
+
+    def test_local_latex_package_macros_are_scanned(self) -> None:
+        namespace = self.load_validator_namespace()
+        snapshot_documents = cast(
+            Callable[[Path], dict[str, str]],
+            namespace["snapshot_public_documents"],
+        )
+        validate_documents = cast(
+            Callable[[dict[str, str], dict[str, str] | None], None],
+            namespace["validate_public_documents"],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "bridge.sty").write_text(
+                "\\newcommand{\\bridge}{Spin(8) triality causes HPV16 capsid assembly.}\n",
+                encoding="utf-8",
+            )
+            (root / "sample.tex").write_text(
+                "\\usepackage{bridge}\n\\bridge\n",
+                encoding="utf-8",
+            )
+            documents = snapshot_documents(root)
+            with self.assertRaises(SystemExit):
+                validate_documents({}, documents)
+
+    def test_public_claim_guard_accepts_contracted_negation(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        for source in (
+            "Spin(8) triality doesn't cause HPV16 capsid assembly.",
+            "Spin(8) triality didn't cause HPV16 capsid assembly.",
+        ):
+            with self.subTest(source=source):
+                validate_public_claim_text("sample.md", source, {})
+
+    def test_public_claim_guard_normalizes_unicode_subscripts(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        for source in (
+            "E₈ symmetry causes HPV16 capsid assembly.",
+            "SiS₂ structure causes HPV16 capsid assembly.",
+        ):
+            with self.subTest(source=source):
+                with self.assertRaises(SystemExit):
+                    validate_public_claim_text("sample.md", source, {})
+
+    def test_public_html_option_implied_end_reveals_visible_text(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.html",
+                (
+                    "<select><option hidden>draft<option>"
+                    "Spin(8) triality causes HPV16 capsid assembly.</select>"
+                ),
+                {},
+            )
+
+    def test_public_html_block_elements_split_claim_scope(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        for tag in ("pre", "figure", "figcaption", "form", "fieldset"):
+            with self.subTest(tag=tag):
+                with self.assertRaises(SystemExit):
+                    validate_public_claim_text(
+                        "sample.html",
+                        (
+                            f"<{tag}>COSMO-D-011 symbolic</{tag}>"
+                            "Spin(8) triality causes HPV16 capsid assembly."
+                        ),
+                        claim_classes,
+                    )
+
+    def test_public_claim_guard_detects_creation_predicates(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        for source in (
+            "Spin(8) triality creates HPV16 capsid assembly.",
+            "Spin(8) triality underlies HPV16 capsid assembly.",
+        ):
+            with self.subTest(source=source):
+                with self.assertRaises(SystemExit):
+                    validate_public_claim_text("sample.md", source, {})
 
 
 if __name__ == "__main__":

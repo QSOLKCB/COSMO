@@ -575,6 +575,17 @@ LATEX_PUBLIC_MACROS: dict[str, str] = {
     r"\EEs": "E8",
     r"\Ouro": "Ouroboros",
 }
+PUBLIC_UNICODE_SUBSCRIPT_TRANSLATION = str.maketrans(
+    "₀₁₂₃₄₅₆₇₈₉",
+    "0123456789",
+)
+
+
+def normalize_public_entity_spellings(text: str) -> str:
+    """Normalize Unicode-subscript entity spellings before semantic scanning."""
+    return text.translate(PUBLIC_UNICODE_SUBSCRIPT_TRANSLATION)
+
+
 PUBLIC_DOMAIN_PATTERNS: dict[str, re.Pattern[str]] = {
     "mathematics": re.compile(
         r"(?:(?<!\w)Spin\(8\)(?!\w)|\b(?:triality|E8|E_8|Weyl)\b)",
@@ -630,6 +641,7 @@ PUBLIC_BIOMEDICAL_E6_E7_CONTEXT_RE = re.compile(
 
 PUBLIC_ASSERTION_RE = re.compile(
     r"\b(?:causes?|caused|drives?|driven|produces?|produced|"
+    r"creates?|created|creating|underlies?|underlay|underlying|"
     r"determines?|determined|explains?|explained|proves?|proved|"
     r"demonstrates?|demonstrated|establish(?:es)?|"
     r"validates?|validated|predicts?|predicted|induces?|induced|"
@@ -656,7 +668,9 @@ PUBLIC_ASSERTION_RE = re.compile(
     re.IGNORECASE,
 )
 PUBLIC_NEGATION_RE = re.compile(
-    r"\b(?:not|never|cannot|can't|does\s+not|do\s+not|"
+    r"\b(?:not|never|cannot|can't|doesn't|didn't|isn't|aren't|"
+    r"wasn't|weren't|hasn't|haven't|hadn't|won't|wouldn't|"
+    r"couldn't|shouldn't|does\s+not|do\s+not|did\s+not|"
     r"is\s+not|are\s+not|without|fails?\s+to)\b",
     re.IGNORECASE,
 )
@@ -1633,6 +1647,25 @@ FORBIDDEN_REGRESSION_RUNTIME_CALLS = frozenset(
 )
 
 
+def _static_string_value(expression: ast.expr) -> str | None:
+    """Resolve simple compile-time string construction used for attribute names."""
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        return expression.value
+    if isinstance(expression, ast.BinOp) and isinstance(expression.op, ast.Add):
+        left = _static_string_value(expression.left)
+        right = _static_string_value(expression.right)
+        if left is not None and right is not None:
+            return left + right
+    if isinstance(expression, ast.JoinedStr):
+        parts: list[str] = []
+        for value in expression.values:
+            if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+                return None
+            parts.append(value.value)
+        return "".join(parts)
+    return None
+
+
 def _forbidden_regression_runtime_primitive(
     tree: ast.Module,
 ) -> str | None:
@@ -1696,39 +1729,41 @@ def _forbidden_regression_runtime_primitive(
             isinstance(node.func, ast.Name)
             and node.func.id == "getattr"
             and len(node.args) >= 2
-            and isinstance(node.args[1], ast.Constant)
-            and node.args[1].value in (
-                FORBIDDEN_REGRESSION_FRAME_ATTRIBUTES
-                | {"_current_frames", "_getframe"}
-            )
         ):
-            return f"getattr(..., {node.args[1].value!r})"
+            attribute_name = _static_string_value(node.args[1])
+            if attribute_name is None:
+                return "dynamic getattr"
+            if attribute_name in (
+                FORBIDDEN_REGRESSION_FRAME_ATTRIBUTES
+                | {"_current_frames", "_getframe", "_exit", "abort"}
+            ):
+                return f"getattr(..., {attribute_name!r})"
     return None
 
 
 class _UnittestInstanceMutationFinder(ast.NodeVisitor):
     """Detect per-instance shadowing of protected unittest methods."""
 
-    def __init__(self) -> None:
+    def __init__(self, instance_names: set[str]) -> None:
+        self.instance_names = instance_names
         self.found = False
 
-    def _is_self(self, node: ast.expr) -> bool:
-        return isinstance(node, ast.Name) and node.id == "self"
+    def _is_instance(self, node: ast.expr) -> bool:
+        return isinstance(node, ast.Name) and node.id in self.instance_names
 
     def _target_is_protected(self, target: ast.expr) -> bool:
         if (
             isinstance(target, ast.Attribute)
-            and self._is_self(target.value)
+            and self._is_instance(target.value)
             and target.attr in UNITTEST_PROTECTED_HOOKS
         ):
             return True
         if (
             isinstance(target, ast.Subscript)
             and isinstance(target.value, ast.Attribute)
-            and self._is_self(target.value.value)
+            and self._is_instance(target.value.value)
             and target.value.attr == "__dict__"
-            and isinstance(target.slice, ast.Constant)
-            and target.slice.value in UNITTEST_PROTECTED_HOOKS
+            and _static_string_value(target.slice) in UNITTEST_PROTECTED_HOOKS
         ):
             return True
         return False
@@ -1756,22 +1791,22 @@ class _UnittestInstanceMutationFinder(ast.NodeVisitor):
             isinstance(node.func, ast.Name)
             and node.func.id in {"setattr", "delattr"}
             and len(node.args) >= 2
-            and self._is_self(node.args[0])
-            and isinstance(node.args[1], ast.Constant)
-            and node.args[1].value in UNITTEST_PROTECTED_HOOKS
+            and self._is_instance(node.args[0])
         ):
-            self.found = True
-            return
+            attribute_name = _static_string_value(node.args[1])
+            if attribute_name is None or attribute_name in UNITTEST_PROTECTED_HOOKS:
+                self.found = True
+                return
         if (
             isinstance(node.func, ast.Attribute)
-            and self._is_self(node.func.value)
+            and self._is_instance(node.func.value)
             and node.func.attr in {"__setattr__", "__delattr__"}
             and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and node.args[0].value in UNITTEST_PROTECTED_HOOKS
         ):
-            self.found = True
-            return
+            attribute_name = _static_string_value(node.args[0])
+            if attribute_name is None or attribute_name in UNITTEST_PROTECTED_HOOKS:
+                self.found = True
+                return
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -1784,15 +1819,85 @@ class _UnittestInstanceMutationFinder(ast.NodeVisitor):
         return
 
 
-def _method_mutates_unittest_instance(method: ast.FunctionDef) -> bool:
-    finder = _UnittestInstanceMutationFinder()
-    for statement in method.body:
-        finder.visit(statement)
-        if finder.found:
-            return True
+class _InstanceHelperCallFinder(ast.NodeVisitor):
+    """Find module helpers called with a known unittest instance alias."""
+
+    def __init__(
+        self,
+        helpers: dict[str, ast.FunctionDef],
+        instance_names: set[str],
+    ) -> None:
+        self.helpers = helpers
+        self.instance_names = instance_names
+        self.calls: list[tuple[str, frozenset[str]]] = []
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name) and node.func.id in self.helpers:
+            helper = self.helpers[node.func.id]
+            parameters = [*helper.args.posonlyargs, *helper.args.args]
+            mapped: set[str] = set()
+            for parameter, argument in zip(parameters, node.args):
+                if isinstance(argument, ast.Name) and argument.id in self.instance_names:
+                    mapped.add(parameter.arg)
+            parameter_names = {parameter.arg for parameter in parameters}
+            for keyword in node.keywords:
+                if (
+                    keyword.arg is not None
+                    and keyword.arg in parameter_names
+                    and isinstance(keyword.value, ast.Name)
+                    and keyword.value.id in self.instance_names
+                ):
+                    mapped.add(keyword.arg)
+            if mapped:
+                self.calls.append((node.func.id, frozenset(mapped)))
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+
+def _method_mutates_unittest_instance(
+    regression_tree: ast.Module,
+    method: ast.FunctionDef,
+) -> bool:
+    helpers = {
+        statement.name: statement
+        for statement in regression_tree.body
+        if isinstance(statement, ast.FunctionDef)
+    }
+    pending: list[tuple[ast.FunctionDef, frozenset[str]]] = [
+        (method, frozenset({"self"}))
+    ]
+    visited: set[tuple[str, frozenset[str]]] = set()
+
+    while pending:
+        function, instance_names = pending.pop()
+        key = (function.name, instance_names)
+        if key in visited:
+            continue
+        visited.add(key)
+
+        finder = _UnittestInstanceMutationFinder(set(instance_names))
+        for statement in function.body:
+            finder.visit(statement)
+            if finder.found:
+                return True
+
+        calls = _InstanceHelperCallFinder(helpers, set(instance_names))
+        for statement in function.body:
+            calls.visit(statement)
+        for helper_name, mapped_names in calls.calls:
+            pending.append((helpers[helper_name], mapped_names))
     return False
 
 
+def locate_unittest_regression(
 def locate_unittest_regression(
     claim_id: str,
     path_text: str,
@@ -1890,7 +1995,7 @@ def locate_unittest_regression(
                         f"{claim_id} regression anchor {anchor!r} may not be "
                         "a generator; its body must execute synchronously"
                     )
-                if _method_mutates_unittest_instance(member):
+                if _method_mutates_unittest_instance(tree, member):
                     fail(
                         f"{claim_id} regression anchor {anchor!r} may not "
                         "shadow protected unittest behavior on self"
@@ -4971,7 +5076,10 @@ def public_assertion_is_negated(
     if re.search(
         r"(?:\b(?:does|do|did|is|are|was|were|has|have|had|"
         r"can|could|would|should|will)\s+not|"
-        r"\bcannot|\bcan't|\bnever|\bfails?\s+to|\bfailed\s+to|"
+        r"\bcannot|\bcan't|\bdoesn't|\bdidn't|\bisn't|\baren't|"
+        r"\bwasn't|\bweren't|\bhasn't|\bhaven't|\bhadn't|"
+        r"\bwon't|\bwouldn't|\bcouldn't|\bshouldn't|\bnever|"
+        r"\bfails?\s+to|\bfailed\s+to|"
         r"\bnot)\s*$",
         predicate_tail,
         re.IGNORECASE,
@@ -5023,13 +5131,32 @@ def strip_markdown_indented_code_blocks(text: str) -> str:
     return "".join(lines)
 
 
-def strip_markdown_link_destinations(text: str) -> str:
-    """Preserve visible labels while removing balanced inline destinations."""
-    text = re.sub(
-        r"(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*\S+.*$",
-        lambda match: _blank_non_newlines(match.group(0)),
-        text,
+def _strip_markdown_reference_definitions(text: str) -> str:
+    """Blank reference definitions and their optional continuation titles."""
+    lines = text.splitlines(keepends=True)
+    result: list[str] = []
+    definition_re = re.compile(r"^ {0,3}\[[^\]\n]+\]:[ \t]*\S+.*$")
+    title_re = re.compile(
+        r"^[ \t]{1,3}(?:\"[^\"\n]*\"|'[^'\n]*'|\([^()\n]*\))[ \t]*(?:\n|$)"
     )
+    index = 0
+    while index < len(lines):
+        line_without_newline = lines[index].rstrip("\r\n")
+        if definition_re.match(line_without_newline) is None:
+            result.append(lines[index])
+            index += 1
+            continue
+        result.append(_blank_non_newlines(lines[index]))
+        index += 1
+        if index < len(lines) and title_re.match(lines[index]) is not None:
+            result.append(_blank_non_newlines(lines[index]))
+            index += 1
+    return "".join(result)
+
+
+def strip_markdown_link_destinations(text: str) -> str:
+    """Preserve visible labels while removing non-rendered destinations."""
+    text = _strip_markdown_reference_definitions(text)
 
     opener = re.compile(r"(!?)\[([^\]\n]*)\]\(")
     parts: list[str] = []
@@ -5065,6 +5192,7 @@ def strip_markdown_link_destinations(text: str) -> str:
 
 
 class _VisibleHTMLTextParser(HTMLParser):
+class _VisibleHTMLTextParser(HTMLParser):
     """Collect rendered inline-HTML text while discarding hidden/raw subtrees."""
 
     BLOCK_TAGS = frozenset(
@@ -5077,7 +5205,13 @@ class _VisibleHTMLTextParser(HTMLParser):
             "dl",
             "dt",
             "dd",
+            "details",
+            "dialog",
+            "fieldset",
+            "figcaption",
+            "figure",
             "footer",
+            "form",
             "h1",
             "h2",
             "h3",
@@ -5085,13 +5219,24 @@ class _VisibleHTMLTextParser(HTMLParser):
             "h5",
             "h6",
             "header",
+            "hgroup",
+            "hr",
             "li",
             "main",
+            "menu",
             "nav",
             "ol",
             "p",
+            "pre",
+            "search",
+            "summary",
             "section",
             "table",
+            "caption",
+            "colgroup",
+            "thead",
+            "tbody",
+            "tfoot",
             "tr",
             "td",
             "th",
@@ -5151,7 +5296,21 @@ class _VisibleHTMLTextParser(HTMLParser):
                 return
 
     def _close_implied_by_start(self, normalized: str) -> None:
-        if normalized == "li":
+        if normalized == "option":
+            self._close_nearest_optional(
+                frozenset({"option"}),
+                frozenset({"select", "datalist", "optgroup", "template"}),
+            )
+        elif normalized == "optgroup":
+            self._close_nearest_optional(
+                frozenset({"option"}),
+                frozenset({"select", "datalist", "template"}),
+            )
+            self._close_nearest_optional(
+                frozenset({"optgroup"}),
+                frozenset({"select", "template"}),
+            )
+        elif normalized == "li":
             self._close_nearest_optional(
                 frozenset({"li"}),
                 frozenset({"ol", "ul", "template"}),
@@ -5357,15 +5516,26 @@ def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
     return re.split(r"\n\s*\n", text)
 
 
+def _markdown_fence_candidate(line: str) -> str:
+    """Remove block-quote prefixes only for fenced-code recognition."""
+    candidate = line
+    while True:
+        match = re.match(r"^ {0,3}>[ \t]?", candidate)
+        if match is None:
+            return candidate
+        candidate = candidate[match.end():]
+
+
 def strip_markdown_fenced_blocks(text: str) -> str:
-    """Blank fenced code blocks without discarding adjacent rendered prose."""
+    """Blank fenced code blocks, including fences nested in block quotes."""
     lines: list[str] = []
     fence_character: str | None = None
     fence_length = 0
 
     for line in text.splitlines(keepends=True):
+        candidate = _markdown_fence_candidate(line)
         if fence_character is None:
-            match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+            match = re.match(r"^ {0,3}(`{3,}|~{3,})", candidate)
             if match is None:
                 lines.append(line)
                 continue
@@ -5378,7 +5548,7 @@ def strip_markdown_fenced_blocks(text: str) -> str:
         lines.append(_blank_non_newlines(line))
         closing = re.match(
             rf"^ {{0,3}}{re.escape(fence_character)}{{{fence_length},}}\s*$",
-            line.rstrip("\n"),
+            candidate.rstrip("\n"),
         )
         if closing is not None:
             fence_character = None
@@ -5387,6 +5557,7 @@ def strip_markdown_fenced_blocks(text: str) -> str:
     return "".join(lines)
 
 
+def strip_latex_disabled_branches(text: str) -> str:
 def strip_latex_disabled_branches(text: str) -> str:
     """Blank known-disabled TeX conditionals while preserving visible else branches."""
     token_re = re.compile(
@@ -5870,6 +6041,7 @@ def validate_public_claim_text(
         rendered_text = html.unescape(rendered_text)
         if suffix == ".tex":
             rendered_text = normalize_latex_visible_text(rendered_text)
+    rendered_text = normalize_public_entity_spellings(rendered_text)
     paragraphs = split_public_rendered_blocks(path_text, rendered_text)
     for paragraph_number, paragraph in enumerate(paragraphs, start=1):
         compact = " ".join(paragraph.split())
@@ -6058,6 +6230,69 @@ def expand_latex_transclusions(
     seen = {*seen, path_text}
     parent = Path(path_text).parent
     text = strip_latex_comments(text)
+
+    package_pattern = re.compile(
+        r"\\usepackage(?:\s*\[[^\]\n]*\])?\s*\{([^{}\n]+)\}"
+    )
+
+    def replace_package(match: re.Match[str]) -> str:
+        expanded_parts: list[str] = []
+        unresolved: list[str] = []
+        for package_name in match.group(1).split(","):
+            package = package_name.strip()
+            if not package:
+                continue
+            relative = parent / (package + ".sty")
+            candidates = [relative, Path(package + ".sty")]
+            target: Path | None = None
+            target_text: str | None = None
+            for candidate in candidates:
+                if candidate.is_absolute() or ".." in candidate.parts:
+                    continue
+                resolved = (root / candidate).resolve()
+                try:
+                    resolved.relative_to(root.resolve())
+                except ValueError:
+                    continue
+                if not resolved.is_file():
+                    continue
+                target = candidate
+                try:
+                    target_text = resolved.read_bytes().decode("utf-8")
+                except (OSError, UnicodeError) as exc:
+                    fail(
+                        f"cannot read LaTeX package {candidate.as_posix()!r}: {exc}"
+                    )
+                break
+            if target is None or target_text is None:
+                unresolved.append(package)
+                continue
+            expanded_parts.append(
+                expand_latex_transclusions(
+                    target.as_posix(),
+                    target_text,
+                    root,
+                    seen,
+                )
+            )
+        if unresolved:
+            expanded_parts.append(
+                "\\usepackage{" + ",".join(unresolved) + "}"
+            )
+        return "\n".join(expanded_parts)
+
+    previous_packages = text
+    for _ in range(32):
+        expanded_packages = package_pattern.sub(
+            replace_package,
+            previous_packages,
+        )
+        if expanded_packages == previous_packages:
+            text = expanded_packages
+            break
+        previous_packages = expanded_packages
+    else:
+        fail(f"too many nested LaTeX packages from {path_text!r}")
 
     pattern = re.compile(r"\\(?:input|include)\s*\{([^{}\n]+)\}")
 
