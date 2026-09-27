@@ -50,6 +50,12 @@ PUBLIC_HYPOTHESIS_QUALIFIER_RE = re.compile(
     r"would|testable|tested|predictive|prediction|if)\b",
     re.IGNORECASE,
 )
+PUBLIC_HYPOTHESIS_PROMOTION_RE = re.compile(
+    r"\b(?:proves?|proved|proven|demonstrates?|demonstrated|"
+    r"establish(?:es|ed)?|validates?|validated|verifies?|verified|"
+    r"confirms?|confirmed)\b",
+    re.IGNORECASE,
+)
 IDENTIFIER_PATTERNS: dict[str, re.Pattern[str]] = {
     "PMID": re.compile(r"[1-9][0-9]{0,7}$"),
     "PMCID": re.compile(r"PMC[1-9][0-9]*$"),
@@ -609,7 +615,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"governs?|governed|influences?|influenced|"
     r"leads?\s+to|results?\s+in|gives?\s+rise\s+to|"
     r"contributes?\s+to|corresponds?\s+to|maps?\s+to|"
-    r"(?:is|are|was|were)\s+(?:necessary|essential)\s+for|"
+    r"(?:is|are|was|were)\s+(?:necessary|essential|sufficient)\s+for|"
     r"depend(?:s|ed|ing)?\s+on|"
     r"requir(?:e|es|ed|ing)|"
     r"is\s+(?:an?\s+|the\s+)?mechanism\s+(?:for|of|behind)|"
@@ -1350,6 +1356,8 @@ def function_contains_yield(node: ast.FunctionDef) -> bool:
 UNITTEST_DISPATCH_HOOKS = frozenset(
     {"run", "_callTestMethod", "__getattribute__", "__getattr__"}
 )
+UNITTEST_ASSERTION_HOOKS = frozenset({"assertEqual", "assertTrue"})
+UNITTEST_PROTECTED_HOOKS = UNITTEST_DISPATCH_HOOKS | UNITTEST_ASSERTION_HOOKS
 
 
 def _is_unittest_testcase_expression(node: ast.expr) -> bool:
@@ -1392,7 +1400,7 @@ class _UnittestDispatchMutationFinder(ast.NodeVisitor):
             and len(node.args) >= 2
             and self._is_dispatch_target(node.args[0])
             and isinstance(node.args[1], ast.Constant)
-            and node.args[1].value in UNITTEST_DISPATCH_HOOKS
+            and node.args[1].value in UNITTEST_PROTECTED_HOOKS
         ):
             self.found = True
             return
@@ -1402,7 +1410,7 @@ class _UnittestDispatchMutationFinder(ast.NodeVisitor):
             and len(node.args) >= 2
             and self._is_dispatch_target(node.args[0])
             and isinstance(node.args[1], ast.Constant)
-            and node.args[1].value in UNITTEST_DISPATCH_HOOKS
+            and node.args[1].value in UNITTEST_PROTECTED_HOOKS
         ):
             self.found = True
             return
@@ -1533,6 +1541,7 @@ FORBIDDEN_REGRESSION_RUNTIME_CALLS = frozenset(
         "inspect.getouterframes",
         "inspect.stack",
         "os._exit",
+        "posix._exit",
         "os.abort",
         "sys._current_frames",
         "sys._getframe",
@@ -1615,7 +1624,7 @@ def locate_unittest_regression(
     if _module_mutates_unittest_dispatch(tree):
         fail(
             f"{claim_id} regression source {path_text} mutates "
-            "unittest.TestCase dispatch at module scope"
+            "protected unittest behavior at module scope"
         )
 
     matches: list[tuple[str, ast.FunctionDef]] = []
@@ -1649,29 +1658,29 @@ def locate_unittest_regression(
             for member in node.body:
                 if (
                     isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and member.name in UNITTEST_DISPATCH_HOOKS
+                    and member.name in UNITTEST_PROTECTED_HOOKS
                 ):
                     fail(
                         f"{claim_id} regression class {node.name!r} may not "
-                        f"override unittest dispatch hook {member.name!r}"
+                        f"override protected unittest method {member.name!r}"
                     )
                 if isinstance(member, ast.Assign) and any(
                     isinstance(target, ast.Name)
-                    and target.id in UNITTEST_DISPATCH_HOOKS
+                    and target.id in UNITTEST_PROTECTED_HOOKS
                     for target in member.targets
                 ):
                     fail(
                         f"{claim_id} regression class {node.name!r} may not "
-                        "rebind unittest dispatch"
+                        "rebind protected unittest behavior"
                     )
                 if (
                     isinstance(member, ast.AnnAssign)
                     and isinstance(member.target, ast.Name)
-                    and member.target.id in UNITTEST_DISPATCH_HOOKS
+                    and member.target.id in UNITTEST_PROTECTED_HOOKS
                 ):
                     fail(
                         f"{claim_id} regression class {node.name!r} may not "
-                        "rebind unittest dispatch"
+                        "rebind protected unittest behavior"
                     )
         for member in node.body:
             if isinstance(member, ast.AsyncFunctionDef) and member.name == anchor:
@@ -1701,7 +1710,7 @@ def locate_unittest_regression(
     if _module_mutates_unittest_dispatch(tree, class_name):
         fail(
             f"{claim_id} regression class {class_name!r} has module-level "
-            "unittest dispatch mutation"
+            "protected unittest mutation"
         )
     return class_name, method
 
@@ -3913,16 +3922,13 @@ def validate_computational_regression_target(
         }
     )
 
-    with tempfile.TemporaryDirectory() as temporary:
-        completion_path = Path(temporary) / "completion"
-        completion_nonce = secrets.token_hex(32)
-        runner = f'''
+    runner = r'''
 import importlib
 import json
+import secrets
 import sys
 import types
 import unittest
-from pathlib import Path
 
 payload = json.loads(sys.stdin.read())
 source = payload["regression_source"]
@@ -3931,17 +3937,8 @@ implementation_module = payload.get("implementation_module")
 implementation_filename = payload.get("implementation_filename")
 class_name, anchor, filename, run_name = sys.argv[1:5]
 
-def _make_authenticated_completion_writer():
-    destination = Path({str(completion_path)!r})
-    secret = {completion_nonce!r}
-
-    def _write_authenticated_completion():
-        destination.write_text(secret, encoding="ascii")
-
-    return _write_authenticated_completion
-
-_write_authenticated_completion = _make_authenticated_completion_writer()
-del _make_authenticated_completion_writer
+completion_nonce = secrets.token_hex(32)
+print(f"COSMO-RUN-BEGIN:{completion_nonce}", flush=True)
 
 if implementation_source is not None and implementation_module is not None:
     package_name, _, child_name = implementation_module.rpartition(".")
@@ -3961,17 +3958,17 @@ if implementation_source is not None and implementation_module is not None:
         if not name.startswith("_") and hasattr(package, name):
             setattr(package, name, value)
 
-namespace = {{
+namespace = {
     "__name__": run_name,
     "__file__": filename,
     "__package__": None,
     "__cached__": None,
-}}
+}
 try:
     code = compile(source, filename, "exec")
     exec(code, namespace)
 except BaseException as exc:
-    print(f"load failed: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
+    print(f"load failed: {type(exc).__name__}: {exc}", file=sys.stderr)
     raise SystemExit(20)
 
 case_type = namespace.get(class_name)
@@ -3984,7 +3981,7 @@ result = unittest.TestResult()
 unittest.TestCase.run(case, result)
 
 if result.testsRun != 1:
-    print(f"testsRun={{result.testsRun}}", file=sys.stderr)
+    print(f"testsRun={result.testsRun}", file=sys.stderr)
     raise SystemExit(22)
 if result.skipped:
     print("regression skipped", file=sys.stderr)
@@ -3998,29 +3995,39 @@ if result.failures or result.errors or result.unexpectedSuccesses:
     print(rendered, file=sys.stderr)
     raise SystemExit(25)
 
-_write_authenticated_completion()
+print(f"COSMO-RUN-END:{completion_nonce}", flush=True)
 '''
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                runner,
-                class_name,
-                anchor,
-                str(path),
-                f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
-            ],
-            cwd=ROOT,
-            input=payload,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-        completion_ok = (
-            completion_path.is_file()
-            and completion_path.read_text(encoding="ascii") == completion_nonce
-        )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            runner,
+            class_name,
+            anchor,
+            str(path),
+            f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
+        ],
+        cwd=ROOT,
+        input=payload,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    begin_nonces = re.findall(
+        r"(?m)^COSMO-RUN-BEGIN:([0-9a-f]{64})$",
+        completed.stdout,
+    )
+    end_nonces = re.findall(
+        r"(?m)^COSMO-RUN-END:([0-9a-f]{64})$",
+        completed.stdout,
+    )
+    completion_ok = (
+        len(begin_nonces) == 1
+        and len(end_nonces) == 1
+        and begin_nonces[0] == end_nonces[0]
+    )
 
     if completed.returncode != 0 or not completion_ok:
         detail_lines = [
@@ -4037,14 +4044,14 @@ _write_authenticated_completion()
                 f"{detail}"
             )
         if completed.returncode == 0 and not completion_ok:
-            detail = "runner completion was not authenticated by parent"
+            detail = "runner completion handshake was not authenticated"
         fail(
             f"{claim_id} regression evidence {path_text}:{anchor} did not pass "
             f"in isolated execution: {detail}"
         )
 
 
-def snapshot_provenance_files(claims: list[object]) -> dict[str, str]:
+def snapshot_provenance_files(def snapshot_provenance_files(claims: list[object]) -> dict[str, str]:
     """Freeze every ledger provenance file before executable evidence runs."""
     snapshots: dict[str, str] = {}
     for claim_index, claim in enumerate(claims):
@@ -4762,12 +4769,51 @@ class _VisibleHTMLTextParser(HTMLParser):
         if not self.parts or not self.parts[-1].endswith("\n\n"):
             self.parts.append("\n\n")
 
+    P_IMPLIED_END_STARTS = frozenset(
+        {
+            "address", "article", "aside", "blockquote", "div", "dl",
+            "fieldset", "footer", "form", "h1", "h2", "h3", "h4", "h5",
+            "h6", "header", "hgroup", "hr", "main", "menu", "nav", "ol",
+            "p", "pre", "section", "table", "ul",
+        }
+    )
+
+    def _close_nearest_optional(
+        self,
+        targets: frozenset[str],
+        stops: frozenset[str],
+    ) -> None:
+        for tag, _hidden in reversed(self.open_tags):
+            if tag in stops:
+                return
+            if tag in targets:
+                self._close_tag(tag)
+                return
+
+    def _close_implied_by_start(self, normalized: str) -> None:
+        if normalized == "li":
+            self._close_nearest_optional(
+                frozenset({"li"}),
+                frozenset({"ol", "ul", "template"}),
+            )
+        elif normalized in {"dt", "dd"}:
+            self._close_nearest_optional(
+                frozenset({"dt", "dd"}),
+                frozenset({"dl", "template"}),
+            )
+        elif normalized in self.P_IMPLIED_END_STARTS:
+            self._close_nearest_optional(
+                frozenset({"p"}),
+                frozenset({"template"}),
+            )
+
     def handle_starttag(
         self,
         tag: str,
         attrs: list[tuple[str, str | None]],
     ) -> None:
         normalized = tag.lower()
+        self._close_implied_by_start(normalized)
         hidden_attribute = any(
             name.lower() == "hidden"
             for name, _value in attrs
@@ -5396,11 +5442,11 @@ def validate_public_claim_text(
                         continue
                     if PUBLIC_SYMBOLIC_QUALIFIER_RE.search(binding_scope) is None:
                         continue
-                if (
-                    evidence_class == "HYPOTHESIS"
-                    and PUBLIC_HYPOTHESIS_QUALIFIER_RE.search(binding_scope) is None
-                ):
-                    continue
+                if evidence_class == "HYPOTHESIS":
+                    if PUBLIC_HYPOTHESIS_PROMOTION_RE.search(binding_scope) is not None:
+                        continue
+                    if PUBLIC_HYPOTHESIS_QUALIFIER_RE.search(binding_scope) is None:
+                        continue
                 claim_domains, claim_entities = semantics.get(
                     claim_id,
                     (set(), set()),

@@ -4157,5 +4157,120 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             )
 
 
+    def test_regression_low_level_exit_cannot_forge_completion(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_target = cast(
+            Callable[
+                [str, str, str, Path, str, str | None, str | None],
+                None,
+            ],
+            namespace["validate_computational_regression_target"],
+        )
+        source = (
+            "import posix\n"
+            "import unittest\n"
+            "class ForgedEvidence(unittest.TestCase):\n"
+            "    def test_evidence(self) -> None:\n"
+            "        pass\n"
+            "posix._exit(0)\n"
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "forbidden runtime primitive|did not pass",
+        ):
+            validate_target(
+                "COSMO-D-999",
+                "tests/test_forged_evidence.py",
+                "test_evidence",
+                REPOSITORY_ROOT / "tests" / "test_forged_evidence.py",
+                source,
+                None,
+                None,
+            )
+
+    def test_public_claim_guard_detects_sufficient_for_dependency(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                "Spin(8) triality is sufficient for HPV16 capsid assembly.",
+                {},
+            )
+
+    def test_d014_rejects_overridden_assert_equal(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b5.py"
+        ).read_text(encoding="utf-8")
+        class_marker = "class IntegratedRecoveryTests(unittest.TestCase):\n"
+        self.assertEqual(regression_text.count(class_marker), 1)
+        source = regression_text.replace(
+            class_marker,
+            (
+                class_marker
+                + "    def assertEqual(self, first: object, second: object, "
+                + "msg: str | None = None) -> None:\n"
+                + "        return None\n\n"
+            ),
+            1,
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "protected unittest method|protected unittest",
+        ):
+            validate_connection(
+                "COSMO-D-014",
+                "cosmo_core/storage.py",
+                "def recover_cube_storage",
+                "tests/test_phase_b5.py",
+                "test_full_cube_recovers_one_bit_error_in_every_codeword",
+                source,
+            )
+
+    def test_public_hypothesis_cannot_promote_itself_to_proven(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    "COSMO-D-012: The hypothesis proves that triality causes "
+                    "HPV16 capsid assembly."
+                ),
+                claim_classes,
+            )
+
+    def test_public_html_parser_honors_implied_optional_end_tags(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        samples = (
+            "<p hidden>draft<p>Spin(8) triality causes HPV16 capsid assembly.</p>",
+            "<ul><li hidden>draft<li>Spin(8) triality causes HPV16 capsid assembly.</ul>",
+            "<dl><dt hidden>draft<dd>Spin(8) triality causes HPV16 capsid assembly.</dl>",
+        )
+        for source in samples:
+            with self.subTest(source=source):
+                with self.assertRaises(SystemExit):
+                    validate_public_claim_text("sample.html", source, {})
+
+
 if __name__ == "__main__":
     unittest.main()
