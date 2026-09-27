@@ -1972,7 +1972,7 @@ def _module_mutates_binding_after_import(
     return False
 
 
-EAGER_GENERATOR_CONSUMERS = frozenset(EAGER_GENERATOR_CONSUMERS = frozenset(
+EAGER_GENERATOR_CONSUMERS = frozenset(
     {
         "all",
         "any",
@@ -2451,7 +2451,7 @@ def _static_selected_exit_kind(
     return None
 
 
-def _expression_is_obviously_nonraising(def _expression_is_obviously_nonraising(expression: ast.expr | None) -> bool:
+def _expression_is_obviously_nonraising(expression: ast.expr | None) -> bool:
     if expression is None or isinstance(expression, ast.Constant):
         return True
     if isinstance(expression, (ast.Tuple, ast.List, ast.Set)):
