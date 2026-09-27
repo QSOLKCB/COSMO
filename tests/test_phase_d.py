@@ -4918,5 +4918,117 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             )
 
 
+    def test_d003_rejects_local_alias_assert_equal_shadowing(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b3.py"
+        ).read_text(encoding="utf-8")
+        marker = (
+            "    def test_root_system_report_has_rank_eight_and_norm_two(self) -> None:\n"
+        )
+        self.assertEqual(regression_text.count(marker), 1)
+        source = regression_text.replace(
+            marker,
+            (
+                marker
+                + "        alias = self\n"
+                + '        setattr(alias, "assertEqual", lambda *_args: None)\n'
+            ),
+            1,
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "shadow protected unittest behavior",
+        ):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_phase_b3.py",
+                "test_root_system_report_has_rank_eight_and_norm_two",
+                source,
+            )
+
+    def test_public_claim_guard_normalizes_latex_text_wrapper(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                r"\(\text{Spin}(8)\) causes HPV16 capsid assembly.",
+                {},
+            )
+
+    def test_symbolic_claim_denial_cannot_govern_positive_bridge(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    "COSMO-D-011 is not a symbolic association: "
+                    "Spin(8) triality causes HPV16 capsid assembly."
+                ),
+                {"COSMO-D-011": "SYMBOLIC"},
+            )
+
+    def test_html_alternate_comment_terminator_preserves_visible_text(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.html",
+                (
+                    "<!-- hidden --!>"
+                    "Spin(8) triality causes HPV16 capsid assembly."
+                ),
+                {},
+            )
+
+    def test_tex_provenance_anchor_must_be_visible(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_provenance = cast(
+            Callable[
+                [str, str, object, dict[str, str] | None],
+                set[str],
+            ],
+            namespace["validate_provenance"],
+        )
+        ledger = self.load_ledger()
+        claim = next(
+            item
+            for item in ledger["claims"]
+            if item["id"] == "COSMO-D-004"
+        )
+        source = (REPOSITORY_ROOT / "cosmovirus.tex").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("COSMO-D-004", source)
+        hidden = source.replace(
+            "COSMO-D-004",
+            r"\phantom{COSMO-D-004}",
+        )
+        with self.assertRaisesRegex(SystemExit, "anchor"):
+            validate_provenance(
+                "COSMO-D-004",
+                "SCIENTIFIC",
+                claim["provenance"],
+                {"cosmovirus.tex": hidden},
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

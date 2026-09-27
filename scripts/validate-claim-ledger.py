@@ -40,6 +40,8 @@ PUBLIC_SYMBOLIC_QUALIFIER_RE = re.compile(
     re.IGNORECASE,
 )
 PUBLIC_SYMBOLIC_PROMOTION_RE = re.compile(
+    r"\b(?:is|are|was|were)\s+not\s+(?:(?:an?|the)\s+)?"
+    r"symbolic(?:\s+association)?\b|"
     r"\b(?:goes?\s+beyond|more\s+than|not\s+(?:merely|just|only))"
     r"\s+(?:(?:an?|the)\s+)?symbolic(?:\s+association)?\b|"
     r"\b(?:is|constitutes?)\s+(?:(?:an?|the)\s+)?"
@@ -1778,16 +1780,55 @@ class _UnittestInstanceMutationFinder(ast.NodeVisitor):
             return True
         return False
 
+    def _record_instance_alias_assignment(
+        self,
+        target: ast.expr,
+        value: ast.expr | None,
+    ) -> None:
+        if isinstance(target, ast.Name):
+            if value is not None and self._is_instance(value):
+                self.instance_names.add(target.id)
+            elif target.id != "self":
+                self.instance_names.discard(target.id)
+            return
+        if (
+            isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+        ):
+            for target_item, value_item in zip(target.elts, value.elts):
+                self._record_instance_alias_assignment(
+                    target_item,
+                    value_item,
+                )
+
     def visit_Assign(self, node: ast.Assign) -> None:
         if any(self._target_is_protected(target) for target in node.targets):
             self.found = True
             return
-        self.generic_visit(node)
+        for target in node.targets:
+            self._record_instance_alias_assignment(target, node.value)
+        self.visit(node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         if self._target_is_protected(node.target):
             self.found = True
             return
+        self._record_instance_alias_assignment(node.target, node.value)
+        if node.value is not None:
+            self.visit(node.value)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        if self._target_is_protected(node.target):
+            self.found = True
+            return
+        self._record_instance_alias_assignment(node.target, node.value)
+        self.visit(node.value)
+
+    def visit_Delete(self, node: ast.Delete) -> None:
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id != "self":
+                self.instance_names.discard(target.id)
         self.generic_visit(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
@@ -1919,7 +1960,7 @@ def _method_mutates_unittest_instance(
             if finder.found:
                 return True
 
-        calls = _InstanceHelperCallFinder(helpers, set(instance_names))
+        calls = _InstanceHelperCallFinder(helpers, set(finder.instance_names))
         for statement in function.body:
             calls.visit(statement)
         for helper_name, mapped_names in calls.calls:
@@ -4600,8 +4641,16 @@ def validate_provenance(
         else:
             anchor_text = text
             suffix = Path(path_text).suffix.lower()
-            if suffix in {".md", ".markdown", ".tex"}:
-                anchor_text = strip_public_nonrendered_comments(path_text, text)
+            if suffix in {".md", ".markdown"}:
+                anchor_text = normalize_markdown_visible_text(
+                    strip_public_nonrendered_comments(path_text, text)
+                )
+            elif suffix == ".tex":
+                anchor_text = normalize_latex_visible_text(
+                    html.unescape(
+                        strip_public_nonrendered_comments(path_text, text)
+                    )
+                )
             elif suffix == ".lean":
                 anchor_text = strip_lean_comments(text)
             if anchor not in anchor_text:
@@ -6037,7 +6086,7 @@ def normalize_latex_visible_text(text: str) -> str:
         text,
     )
     text = re.sub(
-        r"\\(?:textbf|textit|emph|textrm|textsf|texttt|textnormal|"
+        r"\\(?:text|textbf|textit|emph|textrm|textsf|texttt|textnormal|"
         r"underline|mbox|mathrm|mathbf|mathit|mathsf|mathtt|mathnormal|"
         r"operatorname|mathcal|mathbb|mathfrak)"
         r"(?![A-Za-z])\s*",
@@ -6081,11 +6130,12 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
         text = strip_markdown_indented_code_blocks(text)
         text = strip_markdown_link_destinations(text)
 
-    text = re.sub(
-        r"<!--[\s\S]*?(?:-->|$)",
-        "",
-        text,
-    )
+    if suffix not in {".html", ".htm"}:
+        text = re.sub(
+            r"<!--[\s\S]*?(?:--!?>|$)",
+            "",
+            text,
+        )
     if suffix != ".tex":
         return text
 
