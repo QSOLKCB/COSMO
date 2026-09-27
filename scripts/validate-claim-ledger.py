@@ -1054,6 +1054,23 @@ def strip_lean_syntax_quotations(text: str) -> str:
     return "".join(result)
 
 
+def strip_lean_quoted_identifiers(text: str) -> str:
+    """Blank Lean guillemet-escaped identifiers while preserving line structure."""
+    result = list(text)
+    index = 0
+    while index < len(text):
+        if text[index] != "«":
+            index += 1
+            continue
+        end = text.find("»", index + 1)
+        if end == -1:
+            end = len(text) - 1
+        for position in range(index, end + 1):
+            result[position] = "\n" if text[position] == "\n" else " "
+        index = end + 1
+    return "".join(result)
+
+
 def protected_lean_sources() -> set[str]:
     """Execute the protected runner's source-inventory mode."""
     try:
@@ -1127,7 +1144,8 @@ def validate_formal_provenance_target(
             "declaration through ':= by'"
         )
     comment_free_text = strip_lean_comments(text)
-    declaration_text = strip_lean_syntax_quotations(comment_free_text)
+    unquoted_text = strip_lean_quoted_identifiers(comment_free_text)
+    declaration_text = strip_lean_syntax_quotations(unquoted_text)
     normalized_source = normalize_lean_declaration(declaration_text)
     normalized_anchor = normalize_lean_declaration(anchor)
     if normalized_anchor not in normalized_source:
@@ -1199,6 +1217,33 @@ def locate_unittest_regression(
                 f"{anchor!r} must be undecorated so the reviewed class is "
                 "the executed unittest class"
             )
+        if contains_anchor:
+            for member in node.body:
+                if (
+                    isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and member.name == "run"
+                ):
+                    fail(
+                        f"{claim_id} regression class {node.name!r} may not "
+                        "override unittest run dispatch"
+                    )
+                if isinstance(member, ast.Assign) and any(
+                    isinstance(target, ast.Name) and target.id == "run"
+                    for target in member.targets
+                ):
+                    fail(
+                        f"{claim_id} regression class {node.name!r} may not "
+                        "rebind unittest run dispatch"
+                    )
+                if (
+                    isinstance(member, ast.AnnAssign)
+                    and isinstance(member.target, ast.Name)
+                    and member.target.id == "run"
+                ):
+                    fail(
+                        f"{claim_id} regression class {node.name!r} may not "
+                        "rebind unittest run dispatch"
+                    )
         for member in node.body:
             if isinstance(member, ast.AsyncFunctionDef) and member.name == anchor:
                 fail(
@@ -1281,8 +1326,13 @@ def _regression_import_binding(
 class _CallFinder(ast.NodeVisitor):
     """Find one target call without descending into nested functions."""
 
-    def __init__(self, function_name: str) -> None:
+    def __init__(
+        self,
+        function_name: str,
+        module_constants: dict[str, bool],
+    ) -> None:
         self.function_name = function_name
+        self.module_constants = module_constants
         self.found = False
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -1306,7 +1356,13 @@ class _CallFinder(ast.NodeVisitor):
                 self.visit(condition)
                 if self.found:
                     return
-                if _static_boolean_value(condition, {}) is False:
+                if (
+                    _static_boolean_value(
+                        condition,
+                        self.module_constants,
+                    )
+                    is False
+                ):
                     return
         for expression in body:
             self.visit(expression)
@@ -1321,6 +1377,21 @@ class _CallFinder(ast.NodeVisitor):
 
     def visit_DictComp(self, node: ast.DictComp) -> None:
         self._visit_comprehension(node.generators, [node.key, node.value])
+
+    def visit_IfExp(self, node: ast.IfExp) -> None:
+        condition = _static_boolean_value(node.test, self.module_constants)
+        self.visit(node.test)
+        if self.found:
+            return
+        if condition is True:
+            self.visit(node.body)
+            return
+        if condition is False:
+            self.visit(node.orelse)
+            return
+        self.visit(node.body)
+        if not self.found:
+            self.visit(node.orelse)
 
     def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
         # A generator body is deferred. Python evaluates only the outermost
@@ -1341,8 +1412,9 @@ class _CallFinder(ast.NodeVisitor):
 def _statement_calls_function(
     statement: ast.stmt,
     function_name: str,
+    module_constants: dict[str, bool],
 ) -> bool:
-    finder = _CallFinder(function_name)
+    finder = _CallFinder(function_name, module_constants)
     finder.visit(statement)
     return finder.found
 
@@ -1698,7 +1770,11 @@ def _reachable_statements_call_function(
                 return False
             continue
 
-        if _statement_calls_function(statement, function_name):
+        if _statement_calls_function(
+            statement,
+            function_name,
+            module_constants,
+        ):
             return True
     return False
 
@@ -1728,6 +1804,36 @@ class _BindingMutationFinder(ast.NodeVisitor):
             ):
                 return True
         return False
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "update"
+            and isinstance(func.value, ast.Call)
+            and isinstance(func.value.func, ast.Name)
+            and func.value.func.id == "globals"
+        ):
+            if not node.args and not node.keywords:
+                self.generic_visit(node)
+                return
+            for argument in node.args:
+                if isinstance(argument, ast.Dict):
+                    for key in argument.keys:
+                        if key is None:
+                            self.found = True
+                            return
+                        if isinstance(key, ast.Constant) and key.value == self.binding:
+                            self.found = True
+                            return
+                else:
+                    self.found = True
+                    return
+            for keyword in node.keywords:
+                if keyword.arg is None or keyword.arg == self.binding:
+                    self.found = True
+                    return
+        self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
         if any(self._target_mentions_binding(target) for target in node.targets):
@@ -2850,7 +2956,7 @@ def strip_latex_disabled_branches(text: str) -> str:
 def normalize_latex_visible_text(text: str) -> str:
     """Approximate visible LaTeX prose for semantic matching."""
     text = re.sub(
-        r"\\(?:textbf|textit|emph|textrm|textsf|texttt|textnormal|underline)"
+        r"\\(?:textbf|textit|emph|textrm|textsf|texttt|textnormal|underline|mbox)"
         r"(?![A-Za-z])\s*",
         "",
         text,
