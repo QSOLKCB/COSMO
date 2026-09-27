@@ -177,7 +177,7 @@
 - **Boundary:** The repository does not claim an established biological mechanism connecting Spin(8) triality to HPV capsid assembly.
 - **Empirical status:** `NON_EMPIRICAL`
 - **Repository provenance:**
-  - `cosmovirus.tex` — `capsid` (`historical_symbolic_mapping`)
+  - `cosmovirus.tex` — `capsid branching (COSMO-D-011)` (`historical_symbolic_mapping`)
 
 ### COSMO-D-012 — HYPOTHESIS
 
