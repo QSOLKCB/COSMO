@@ -1234,6 +1234,28 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 unreachable_assert_handler,
             )
 
+        mutated_function_alias = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        alias = validate_e8_root_system\n"
+            "        setattr(\n"
+            "            alias, '__code__',\n"
+            "            (lambda *_args: None).__code__,\n"
+            "        )\n"
+            "        validate_e8_root_system(())\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                mutated_function_alias,
+            )
+
         mutated_function_object = (
             "import unittest\n"
             "from cosmo_core.e8 import validate_e8_root_system\n"
@@ -1807,6 +1829,15 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         )
         with self.assertRaises(SystemExit):
             validate_public_claim_text(
+                "sample.md",
+                (
+                    "Spin(8) triality is fundamental. "
+                    "It causes HPV16 capsid assembly."
+                ),
+                {},
+            )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
                 "README.md",
                 unsupported,
                 claim_classes,
@@ -2220,6 +2251,28 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                     "| Spin(8) triality causes HPV16 capsid assembly. | open |\n"
                 ),
                 {},
+            )
+
+    def test_public_latex_list_items_do_not_share_claim_scope(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                (
+                    "\\begin{itemize}\n"
+                    "\\item COSMO-D-011 symbolic association\n"
+                    "\\item Spin(8) triality causes HPV16 capsid assembly.\n"
+                    "\\end{itemize}\n"
+                ),
+                claim_classes,
             )
 
     def test_public_claim_guard_scans_latex_table_cells(self) -> None:
