@@ -4642,8 +4642,9 @@ def validate_provenance(
             anchor_text = text
             suffix = Path(path_text).suffix.lower()
             if suffix in {".md", ".markdown"}:
-                anchor_text = normalize_markdown_visible_text(
-                    strip_public_nonrendered_comments(path_text, text)
+                anchor_text = strip_public_nonrendered_comments(
+                    path_text,
+                    text,
                 )
             elif suffix == ".tex":
                 anchor_text = normalize_latex_visible_text(
