@@ -1898,7 +1898,6 @@ def _method_mutates_unittest_instance(
 
 
 def locate_unittest_regression(
-def locate_unittest_regression(
     claim_id: str,
     path_text: str,
     anchor: str,
