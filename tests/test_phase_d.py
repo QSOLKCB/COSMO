@@ -941,6 +941,25 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 disabled_by_constant_comparison,
             )
 
+        disabled_by_runtime_false_bool = (
+            "import unittest\n"
+            "from cosmo_core import canonical_e8_roots\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        if bool(0):\n"
+            "            validate_e8_root_system(canonical_e8_roots())\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                disabled_by_runtime_false_bool,
+            )
+
         disabled_by_while_false = (
             "import unittest\n"
             "from cosmo_core.e8 import validate_e8_root_system\n"
@@ -1609,6 +1628,21 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             source,
         )
 
+    def test_d011_provenance_anchor_is_mapping_specific(self) -> None:
+        ledger = self.load_ledger()
+        claim = next(
+            claim for claim in ledger["claims"]
+            if claim["id"] == "COSMO-D-011"
+        )
+        self.assertEqual(
+            claim["provenance"][0]["anchor"],
+            "capsid branching (COSMO-D-011)",
+        )
+        source = (REPOSITORY_ROOT / "cosmovirus.tex").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("capsid branching (COSMO-D-011)", source)
+
     def test_public_cross_domain_assertion_requires_claim_id(self) -> None:
         namespace = self.load_validator_namespace()
         validate_public_claim_text = cast(
@@ -1722,6 +1756,21 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "COSMO-D-011: Spin(8) triality causes HPV16 capsid assembly.",
                 claim_classes,
             )
+
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "README.md",
+                "COSMO-D-012: Triality causes HPV16 capsid assembly.",
+                claim_classes,
+            )
+        validate_public_claim_text(
+            "README.md",
+            (
+                "COSMO-D-012 proposes that triality could predict "
+                "HPV16 capsid assembly."
+            ),
+            claim_classes,
+        )
 
         governed = (
             "COSMO-D-011 records that Spin(8) triality causes HPV16 "
@@ -2053,6 +2102,22 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                     "Spin(8) triality causes HPV16 capsid assembly."
                 ),
                 claim_classes,
+            )
+
+    def test_public_claim_guard_normalizes_latex_href_label(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                (
+                    r"Spin(8) triality ca\href{https://example.org}{uses} "
+                    r"HPV16 capsid assembly."
+                ),
+                {},
             )
 
     def test_public_claim_guard_normalizes_latex_textcolor(self) -> None:
