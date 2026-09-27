@@ -3967,5 +3967,195 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         self.assertEqual(source["identifiers"]["DOI"], "10.1021/ic501825r")
 
 
+    def test_d014_selected_match_exit_hides_later_assertions(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b5.py"
+        ).read_text(encoding="utf-8")
+        required_assertions = (
+            "        self.assertEqual(recovered.cube, cube)\n"
+            "        self.assertEqual(\n"
+            "            recovered.storage.corrected_codewords,\n"
+            "            codeword_count,\n"
+            "        )\n"
+        )
+        self.assertEqual(regression_text.count(required_assertions), 1)
+        source = regression_text.replace(
+            required_assertions,
+            (
+                "        match 1:\n"
+                "            case 1:\n"
+                "                return\n"
+                + required_assertions
+            ),
+            1,
+        )
+        with self.assertRaisesRegex(SystemExit, "missing assertEqual pairs"):
+            validate_connection(
+                "COSMO-D-014",
+                "cosmo_core/storage.py",
+                "def recover_cube_storage",
+                "tests/test_phase_b5.py",
+                "test_full_cube_recovers_one_bit_error_in_every_codeword",
+                source,
+            )
+
+    def test_d014_reviewed_assignment_must_precede_assertions(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b5.py"
+        ).read_text(encoding="utf-8")
+        reviewed_call = (
+            "        recovered = recover_cube_storage(\n"
+            "            artifact,\n"
+            "            received_dna=corrupted,\n"
+            "        )\n"
+        )
+        required_assertions = (
+            "        self.assertEqual(recovered.cube, cube)\n"
+            "        self.assertEqual(\n"
+            "            recovered.storage.corrected_codewords,\n"
+            "            codeword_count,\n"
+            "        )\n"
+        )
+        original = reviewed_call + "\n" + required_assertions
+        self.assertEqual(regression_text.count(original), 1)
+        source = regression_text.replace(
+            original,
+            (
+                "        recovered = object()\n\n"
+                + required_assertions
+                + "\n"
+                + reviewed_call
+            ),
+            1,
+        )
+        with self.assertRaisesRegex(SystemExit, "missing assertEqual pairs"):
+            validate_connection(
+                "COSMO-D-014",
+                "cosmo_core/storage.py",
+                "def recover_cube_storage",
+                "tests/test_phase_b5.py",
+                "test_full_cube_recovers_one_bit_error_in_every_codeword",
+                source,
+            )
+
+    def test_d014_rejects_package_export_mutation_before_import(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b5.py"
+        ).read_text(encoding="utf-8")
+        import_marker = "from cosmo_core import (\n"
+        self.assertEqual(regression_text.count(import_marker), 1)
+        source = regression_text.replace(
+            import_marker,
+            (
+                "import cosmo_core\n"
+                "setattr(\n"
+                "    cosmo_core,\n"
+                '    "recover_cube_storage",\n'
+                "    lambda *args, **kwargs: None,\n"
+                ")\n"
+                + import_marker
+            ),
+            1,
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "rebinds or patches imported implementation binding",
+        ):
+            validate_connection(
+                "COSMO-D-014",
+                "cosmo_core/storage.py",
+                "def recover_cube_storage",
+                "tests/test_phase_b5.py",
+                "test_full_cube_recovers_one_bit_error_in_every_codeword",
+                source,
+            )
+
+    def test_regression_runtime_rejects_frame_completion_forgery_primitives(
+        self,
+    ) -> None:
+        namespace = self.load_validator_namespace()
+        validate_target = cast(
+            Callable[
+                [str, str, str, Path, str, str | None, str | None],
+                None,
+            ],
+            namespace["validate_computational_regression_target"],
+        )
+        source = (
+            "import sys\n"
+            "import unittest\n"
+            "sys._getframe()\n"
+            "class ForgedEvidence(unittest.TestCase):\n"
+            "    def test_evidence(self) -> None:\n"
+            "        pass\n"
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "forbidden runtime primitive",
+        ):
+            validate_target(
+                "COSMO-D-999",
+                "tests/test_forged_evidence.py",
+                "test_evidence",
+                REPOSITORY_ROOT / "tests" / "test_forged_evidence.py",
+                source,
+                None,
+                None,
+            )
+
+    def test_public_claim_guard_expands_two_argument_user_latex_macro(
+        self,
+    ) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                (
+                    r"\newcommand{\bridge}[2]"
+                    r"{Spin(8) #1 causes HPV16 #2.}"
+                    r"\bridge{triality}{capsid assembly}"
+                ),
+                {},
+            )
+
+    def test_public_claim_guard_strips_tex_comments_before_conditionals(
+        self,
+    ) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                (
+                    "% \\iffalse\n"
+                    "Spin(8) triality causes HPV16 capsid assembly.\n"
+                    "% \\fi\n"
+                ),
+                {},
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
