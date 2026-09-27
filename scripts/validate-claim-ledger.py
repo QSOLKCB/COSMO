@@ -1433,6 +1433,30 @@ class _UnittestDispatchMutationFinder(ast.NodeVisitor):
         return
 
 
+class _ModuleHelperCallFinder(ast.NodeVisitor):
+    """Collect module-level helper calls without descending into definitions."""
+
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name):
+            self.names.add(node.func.id)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+
 def _module_mutates_unittest_dispatch(
     tree: ast.Module,
     claimed_class: str | None = None,
@@ -1442,6 +1466,36 @@ def _module_mutates_unittest_dispatch(
         finder.visit(statement)
         if finder.found:
             return True
+
+    helpers = {
+        statement.name: statement
+        for statement in tree.body
+        if isinstance(statement, ast.FunctionDef)
+    }
+    calls = _ModuleHelperCallFinder()
+    for statement in tree.body:
+        calls.visit(statement)
+
+    pending = list(calls.names & set(helpers))
+    visited: set[str] = set()
+    while pending:
+        helper_name = pending.pop()
+        if helper_name in visited:
+            continue
+        visited.add(helper_name)
+        helper = helpers[helper_name]
+
+        helper_finder = _UnittestDispatchMutationFinder(claimed_class)
+        for statement in helper.body:
+            helper_finder.visit(statement)
+            if helper_finder.found:
+                return True
+
+        nested_calls = _ModuleHelperCallFinder()
+        for statement in helper.body:
+            nested_calls.visit(statement)
+        pending.extend((nested_calls.names & set(helpers)) - visited)
+
     return False
 
 
@@ -2685,9 +2739,175 @@ def _simple_attribute_path(expression: ast.expr) -> str | None:
     return None
 
 
+def _assert_equal_pair(statement: ast.stmt) -> frozenset[str] | None:
+    if not isinstance(statement, ast.Expr):
+        return None
+    call = statement.value
+    if (
+        not isinstance(call, ast.Call)
+        or not isinstance(call.func, ast.Attribute)
+        or call.func.attr != "assertEqual"
+        or len(call.args) < 2
+    ):
+        return None
+    left = _simple_attribute_path(call.args[0])
+    right = _simple_attribute_path(call.args[1])
+    if left is None or right is None:
+        return None
+    return frozenset({left, right})
+
+
+def _reachable_assert_equal_pairs(
+    statements: list[ast.stmt],
+    module_constants: dict[str, bool],
+) -> set[frozenset[str]]:
+    observed: set[frozenset[str]] = set()
+    for statement in statements:
+        if isinstance(statement, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+            break
+
+        pair = _assert_equal_pair(statement)
+        if pair is not None:
+            observed.add(pair)
+            continue
+
+        if isinstance(statement, ast.If):
+            condition = _static_boolean_value(statement.test, module_constants)
+            if condition is True:
+                observed.update(
+                    _reachable_assert_equal_pairs(
+                        statement.body,
+                        module_constants,
+                    )
+                )
+            elif condition is False:
+                observed.update(
+                    _reachable_assert_equal_pairs(
+                        statement.orelse,
+                        module_constants,
+                    )
+                )
+            else:
+                observed.update(
+                    _reachable_assert_equal_pairs(
+                        statement.body,
+                        module_constants,
+                    )
+                )
+                observed.update(
+                    _reachable_assert_equal_pairs(
+                        statement.orelse,
+                        module_constants,
+                    )
+                )
+            continue
+
+        if isinstance(statement, ast.While):
+            condition = _static_boolean_value(statement.test, module_constants)
+            if condition is not False:
+                observed.update(
+                    _reachable_assert_equal_pairs(
+                        statement.body,
+                        module_constants,
+                    )
+                )
+            if condition is not True:
+                observed.update(
+                    _reachable_assert_equal_pairs(
+                        statement.orelse,
+                        module_constants,
+                    )
+                )
+            continue
+
+        if isinstance(statement, (ast.For, ast.AsyncFor)):
+            has_items = _static_iterable_has_items(statement.iter)
+            if has_items is not False:
+                observed.update(
+                    _reachable_assert_equal_pairs(
+                        statement.body,
+                        module_constants,
+                    )
+                )
+            observed.update(
+                _reachable_assert_equal_pairs(
+                    statement.orelse,
+                    module_constants,
+                )
+            )
+            continue
+
+        if isinstance(statement, ast.Match):
+            subject_known, subject_value = _static_literal_value(
+                statement.subject
+            )
+            for case in statement.cases:
+                pattern_match = (
+                    _static_match_pattern_matches(case.pattern, subject_value)
+                    if subject_known
+                    else None
+                )
+                if pattern_match is False:
+                    continue
+                guard_value = (
+                    _static_boolean_value(case.guard, module_constants)
+                    if case.guard is not None
+                    else True
+                )
+                if guard_value is False:
+                    continue
+                observed.update(
+                    _reachable_assert_equal_pairs(
+                        case.body,
+                        module_constants,
+                    )
+                )
+                if pattern_match is True and guard_value is True:
+                    break
+            continue
+
+        if isinstance(statement, (ast.With, ast.AsyncWith)):
+            observed.update(
+                _reachable_assert_equal_pairs(
+                    statement.body,
+                    module_constants,
+                )
+            )
+            continue
+
+        if isinstance(statement, ast.Try):
+            observed.update(
+                _reachable_assert_equal_pairs(
+                    statement.body,
+                    module_constants,
+                )
+            )
+            for handler in statement.handlers:
+                observed.update(
+                    _reachable_assert_equal_pairs(
+                        handler.body,
+                        module_constants,
+                    )
+                )
+            observed.update(
+                _reachable_assert_equal_pairs(
+                    statement.orelse,
+                    module_constants,
+                )
+            )
+            observed.update(
+                _reachable_assert_equal_pairs(
+                    statement.finalbody,
+                    module_constants,
+                )
+            )
+    return observed
+
+
 def validate_reviewed_computational_regression_semantics(
     claim_id: str,
     method: ast.FunctionDef,
+    module_constants: dict[str, bool],
 ) -> None:
     """Require reviewed result assertions for claim-specific computational evidence."""
     if claim_id != "COSMO-D-014":
@@ -2702,20 +2922,10 @@ def validate_reviewed_computational_regression_semantics(
             }
         ),
     }
-    observed_pairs: set[frozenset[str]] = set()
-    for node in ast.walk(method):
-        if not isinstance(node, ast.Call):
-            continue
-        if (
-            not isinstance(node.func, ast.Attribute)
-            or node.func.attr != "assertEqual"
-            or len(node.args) < 2
-        ):
-            continue
-        left = _simple_attribute_path(node.args[0])
-        right = _simple_attribute_path(node.args[1])
-        if left is not None and right is not None:
-            observed_pairs.add(frozenset({left, right}))
+    observed_pairs = _reachable_assert_equal_pairs(
+        method.body,
+        module_constants,
+    )
 
     missing = required_pairs - observed_pairs
     if missing:
@@ -2815,6 +3025,7 @@ def validate_computational_evidence_connection(
     validate_reviewed_computational_regression_semantics(
         claim_id,
         method,
+        module_constants,
     )
 
 
@@ -3633,6 +3844,8 @@ class _VisibleHTMLTextParser(HTMLParser):
             "section",
             "table",
             "tr",
+            "td",
+            "th",
             "ul",
         }
     )
@@ -3896,6 +4109,104 @@ def strip_latex_disabled_branches(text: str) -> str:
     return "".join(parts)
 
 
+def latex_zero_arg_macro_definitions(text: str) -> dict[str, str]:
+    """Extract simple zero-argument user-defined macros and their rendered bodies."""
+    command_re = re.compile(
+        r"\\(?:newcommand|renewcommand|providecommand)\*?"
+    )
+    macros: dict[str, str] = {}
+    cursor = 0
+
+    def skip_space(index: int) -> int:
+        while index < len(text) and text[index].isspace():
+            index += 1
+        return index
+
+    def braced_end(index: int) -> int | None:
+        if index >= len(text) or text[index] != "{":
+            return None
+        depth = 0
+        position = index
+        while position < len(text):
+            character = text[position]
+            escaped = (
+                position > 0
+                and text[position - 1] == "\\"
+                and (position < 2 or text[position - 2] != "\\")
+            )
+            if not escaped:
+                if character == "{":
+                    depth += 1
+                elif character == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return position + 1
+            position += 1
+        return None
+
+    while True:
+        match = command_re.search(text, cursor)
+        if match is None:
+            break
+        index = skip_space(match.end())
+        macro_name: str | None = None
+
+        if index < len(text) and text[index] == "{":
+            name_end = braced_end(index)
+            if name_end is None:
+                cursor = match.end()
+                continue
+            raw_name = text[index + 1:name_end - 1].strip()
+            if re.fullmatch(r"\\[A-Za-z@]+", raw_name):
+                macro_name = raw_name
+            index = skip_space(name_end)
+        elif index < len(text) and text[index] == "\\":
+            name_match = re.match(r"\\[A-Za-z@]+", text[index:])
+            if name_match is None:
+                cursor = match.end()
+                continue
+            macro_name = name_match.group(0)
+            index = skip_space(index + name_match.end())
+        else:
+            cursor = match.end()
+            continue
+
+        # Parameterized macros require argument substitution and are intentionally
+        # not expanded by this renderer approximation.
+        if index < len(text) and text[index] == "[":
+            cursor = match.end()
+            continue
+
+        body_end = braced_end(index)
+        if body_end is None:
+            cursor = match.end()
+            continue
+        if macro_name is not None:
+            macros[macro_name] = text[index + 1:body_end - 1]
+        cursor = body_end
+
+    return macros
+
+
+def expand_latex_zero_arg_macros(text: str, macros: dict[str, str]) -> str:
+    """Expand visible invocations of reviewed zero-argument user macros."""
+    rendered = text
+    for _ in range(max(1, len(macros) + 1)):
+        changed = False
+        for macro, body in macros.items():
+            updated = re.sub(
+                re.escape(macro) + r"(?![A-Za-z@])",
+                lambda _match, replacement=body: replacement,
+                rendered,
+            )
+            if updated != rendered:
+                changed = True
+                rendered = updated
+        if not changed:
+            break
+    return rendered
+
+
 def strip_latex_macro_definitions(text: str) -> str:
     """Blank non-rendered new/renew/providecommand definitions."""
     command_re = re.compile(
@@ -4024,7 +4335,9 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
     if suffix != ".tex":
         return text
 
+    user_macros = latex_zero_arg_macro_definitions(text)
     text = strip_latex_macro_definitions(text)
+    text = expand_latex_zero_arg_macros(text, user_macros)
     for macro, expansion in LATEX_PUBLIC_MACROS.items():
         text = re.sub(
             re.escape(macro) + r"(?![A-Za-z])",
