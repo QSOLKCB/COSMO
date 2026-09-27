@@ -4303,9 +4303,6 @@ raise SystemExit(_run_regression())
 '''
     try:
         completed = subprocess.run(
-'''
-    try:
-        completed = subprocess.run(
             [
                 sys.executable,
                 "-c",
