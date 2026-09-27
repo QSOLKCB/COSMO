@@ -4656,9 +4656,9 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
         validate_public_claim_text(
             "sample.md",
             (
-                "> \`\`\`text\n"
+                "> ```text\n"
                 "> Spin(8) triality causes HPV16 capsid assembly.\n"
-                "> \`\`\`\n"
+                "> ```\n"
             ),
             {},
         )
