@@ -4194,9 +4194,12 @@ def expand_latex_zero_arg_macros(text: str, macros: dict[str, str]) -> str:
     for _ in range(max(1, len(macros) + 1)):
         changed = False
         for macro, body in macros.items():
+            def replace_macro(_match: re.Match[str], replacement: str = body) -> str:
+                return replacement
+
             updated = re.sub(
                 re.escape(macro) + r"(?![A-Za-z@])",
-                lambda _match, replacement=body: replacement,
+                replace_macro,
                 rendered,
             )
             if updated != rendered:
