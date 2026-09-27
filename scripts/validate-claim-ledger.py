@@ -1119,6 +1119,43 @@ def normalize_lean_declaration(text: str) -> str:
     return " ".join(text.split())
 
 
+def lean_exact_namespace_text(
+    text: str,
+    namespace_name: str,
+) -> str:
+    """Retain only source text directly inside one exact Lean namespace."""
+    stack: list[str] = []
+    rendered: list[str] = []
+    namespace_re = re.compile(
+        r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_.']*)\s*$"
+    )
+    end_re = re.compile(
+        r"^\s*end(?:\s+([A-Za-z_][A-Za-z0-9_.']*))?\s*$"
+    )
+
+    for line in text.splitlines(keepends=True):
+        line_without_newline = line.rstrip("\n")
+        namespace_match = namespace_re.match(line_without_newline)
+        if namespace_match is not None:
+            stack.append(namespace_match.group(1))
+            rendered.append(_blank_non_newlines(line))
+            continue
+
+        end_match = end_re.match(line_without_newline)
+        if end_match is not None:
+            rendered.append(_blank_non_newlines(line))
+            if stack:
+                stack.pop()
+            continue
+
+        if stack == [namespace_name]:
+            rendered.append(line)
+        else:
+            rendered.append(_blank_non_newlines(line))
+
+    return "".join(rendered)
+
+
 def validate_formal_provenance_target(
     claim_id: str,
     path_text: str,
@@ -1146,7 +1183,11 @@ def validate_formal_provenance_target(
     comment_free_text = strip_lean_comments(text)
     unquoted_text = strip_lean_quoted_identifiers(comment_free_text)
     declaration_text = strip_lean_syntax_quotations(unquoted_text)
-    normalized_source = normalize_lean_declaration(declaration_text)
+    scoped_text = lean_exact_namespace_text(
+        declaration_text,
+        "Cosmovirus",
+    )
+    normalized_source = normalize_lean_declaration(scoped_text)
     normalized_anchor = normalize_lean_declaration(anchor)
     if normalized_anchor not in normalized_source:
         fail(
@@ -1221,28 +1262,29 @@ def locate_unittest_regression(
             for member in node.body:
                 if (
                     isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and member.name == "run"
+                    and member.name in {"run", "_callTestMethod"}
                 ):
                     fail(
                         f"{claim_id} regression class {node.name!r} may not "
-                        "override unittest run dispatch"
+                        f"override unittest dispatch hook {member.name!r}"
                     )
                 if isinstance(member, ast.Assign) and any(
-                    isinstance(target, ast.Name) and target.id == "run"
+                    isinstance(target, ast.Name)
+                    and target.id in {"run", "_callTestMethod"}
                     for target in member.targets
                 ):
                     fail(
                         f"{claim_id} regression class {node.name!r} may not "
-                        "rebind unittest run dispatch"
+                        "rebind unittest dispatch"
                     )
                 if (
                     isinstance(member, ast.AnnAssign)
                     and isinstance(member.target, ast.Name)
-                    and member.target.id == "run"
+                    and member.target.id in {"run", "_callTestMethod"}
                 ):
                     fail(
                         f"{claim_id} regression class {node.name!r} may not "
-                        "rebind unittest run dispatch"
+                        "rebind unittest dispatch"
                     )
         for member in node.body:
             if isinstance(member, ast.AsyncFunctionDef) and member.name == anchor:
@@ -1407,6 +1449,16 @@ class _CallFinder(ast.NodeVisitor):
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         return
+
+
+def _expression_calls_function(
+    expression: ast.expr,
+    function_name: str,
+    module_constants: dict[str, bool],
+) -> bool:
+    finder = _CallFinder(function_name, module_constants)
+    finder.visit(expression)
+    return finder.found
 
 
 def _statement_calls_function(
@@ -1651,6 +1703,12 @@ def _reachable_statements_call_function(
             return False
 
         if isinstance(statement, ast.If):
+            if _expression_calls_function(
+                statement.test,
+                function_name,
+                module_constants,
+            ):
+                return True
             condition = _static_boolean_value(
                 statement.test,
                 module_constants,
@@ -1681,6 +1739,12 @@ def _reachable_statements_call_function(
             continue
 
         if isinstance(statement, ast.While):
+            if _expression_calls_function(
+                statement.test,
+                function_name,
+                module_constants,
+            ):
+                return True
             condition = _static_boolean_value(
                 statement.test,
                 module_constants,
@@ -1708,6 +1772,12 @@ def _reachable_statements_call_function(
             continue
 
         if isinstance(statement, (ast.For, ast.AsyncFor)):
+            if _expression_calls_function(
+                statement.iter,
+                function_name,
+                module_constants,
+            ):
+                return True
             has_items = _static_iterable_has_items(statement.iter)
             if has_items is False:
                 if _reachable_statements_call_function(
@@ -1941,6 +2011,35 @@ def _method_mutates_binding(method: ast.FunctionDef, binding: str) -> bool:
     return False
 
 
+def _fixture_mutates_binding(
+    regression_tree: ast.Module,
+    class_name: str,
+    binding: str,
+) -> bool:
+    """Reject pre-test fixtures that mutate the reviewed imported binding."""
+    module_fixture_names = {"setUpModule"}
+    class_fixture_names = {"setUpClass", "setUp"}
+
+    for statement in regression_tree.body:
+        if (
+            isinstance(statement, ast.FunctionDef)
+            and statement.name in module_fixture_names
+        ):
+            if _method_mutates_binding(statement, binding):
+                return True
+
+        if not isinstance(statement, ast.ClassDef) or statement.name != class_name:
+            continue
+        for member in statement.body:
+            if (
+                isinstance(member, ast.FunctionDef)
+                and member.name in class_fixture_names
+                and _method_mutates_binding(member, binding)
+            ):
+                return True
+    return False
+
+
 def _regression_calls_function(
     method: ast.FunctionDef,
     function_name: str,
@@ -1997,6 +2096,16 @@ def validate_computational_evidence_connection(
         fail(
             f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
             f"rebinds or patches imported implementation binding {imported_binding}"
+        )
+    if _fixture_mutates_binding(
+        regression_tree,
+        class_name,
+        imported_binding,
+    ):
+        fail(
+            f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
+            f"has a pre-test fixture that rebinds or patches imported "
+            f"implementation binding {imported_binding}"
         )
     module_constants = _module_boolean_constants(regression_tree)
     if not _regression_calls_function(
@@ -2956,6 +3065,11 @@ def strip_latex_disabled_branches(text: str) -> str:
 def normalize_latex_visible_text(text: str) -> str:
     """Approximate visible LaTeX prose for semantic matching."""
     text = re.sub(
+        r"\\textcolor\s*\{[^{}\n]*\}\s*\{([^{}\n]*)\}",
+        r"\1",
+        text,
+    )
+    text = re.sub(
         r"\\(?:textbf|textit|emph|textrm|textsf|texttt|textnormal|underline|mbox)"
         r"(?![A-Za-z])\s*",
         "",
@@ -3083,6 +3197,7 @@ def validate_public_claim_text(
                 entity_overlap = local_entities & claim_entities
                 if (
                     local_domains.issubset(claim_domains)
+                    and local_entities.issubset(claim_entities)
                     and len(entity_overlap) >= min(2, len(local_entities))
                 ):
                     governing_ids.add(claim_id)
