@@ -29,6 +29,12 @@ LEAN_THEOREM_ANCHOR = re.compile(
     r"theorem ([A-Za-z_][A-Za-z0-9_']*)\b.+:=\s*by$"
 )
 PUBLIC_CROSS_DOMAIN_GOVERNING_CLASSES = frozenset({"HYPOTHESIS", "SYMBOLIC"})
+PUBLIC_SYMBOLIC_QUALIFIER_RE = re.compile(
+    r"\b(?:symbolic|association|non[- ]empirical|only\s+as|"
+    r"does\s+not\s+claim|not\s+(?:(?:an?|the)\s+)?"
+    r"(?:(?:established|biological)\s+){0,2}mechanism)\b",
+    re.IGNORECASE,
+)
 IDENTIFIER_PATTERNS: dict[str, re.Pattern[str]] = {
     "PMID": re.compile(r"[1-9][0-9]{0,7}$"),
     "PMCID": re.compile(r"PMC[1-9][0-9]*$"),
@@ -825,6 +831,28 @@ def canonical_identifier_url(identifier_type: str, value: str) -> str:
     raise AssertionError(f"identifier type {identifier_type!r} is not URL-bound")
 
 
+LEDGER_FIELDS = frozenset(
+    {
+        "schema",
+        "evidence_classes",
+        "sources",
+        "claims",
+    }
+)
+
+
+def validate_ledger_fields(ledger: dict[str, Any]) -> None:
+    """Reject missing or unreviewed fields at the canonical ledger root."""
+    actual_fields = set(ledger)
+    if actual_fields != LEDGER_FIELDS:
+        missing = sorted(LEDGER_FIELDS - actual_fields)
+        extra = sorted(actual_fields - LEDGER_FIELDS)
+        fail(
+            "ledger root fields differ from reviewed schema; "
+            f"missing={missing}, extra={extra}"
+        )
+
+
 SOURCE_RECORD_FIELDS = frozenset(
     {
         "id",
@@ -1123,11 +1151,14 @@ def lean_exact_namespace_text(
     text: str,
     namespace_name: str,
 ) -> str:
-    """Retain only source text directly inside one exact Lean namespace."""
-    stack: list[str] = []
+    """Retain only declarations directly inside one exact Lean namespace."""
+    scopes: list[tuple[str, str | None]] = []
     rendered: list[str] = []
     namespace_re = re.compile(
         r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_.']*)\s*$"
+    )
+    section_re = re.compile(
+        r"^\s*section(?:\s+([A-Za-z_][A-Za-z0-9_.']*))?\s*$"
     )
     end_re = re.compile(
         r"^\s*end(?:\s+([A-Za-z_][A-Za-z0-9_.']*))?\s*$"
@@ -1137,18 +1168,24 @@ def lean_exact_namespace_text(
         line_without_newline = line.rstrip("\n")
         namespace_match = namespace_re.match(line_without_newline)
         if namespace_match is not None:
-            stack.append(namespace_match.group(1))
+            scopes.append(("namespace", namespace_match.group(1)))
+            rendered.append(_blank_non_newlines(line))
+            continue
+
+        section_match = section_re.match(line_without_newline)
+        if section_match is not None:
+            scopes.append(("section", section_match.group(1)))
             rendered.append(_blank_non_newlines(line))
             continue
 
         end_match = end_re.match(line_without_newline)
         if end_match is not None:
             rendered.append(_blank_non_newlines(line))
-            if stack:
-                stack.pop()
+            if scopes:
+                scopes.pop()
             continue
 
-        if stack == [namespace_name]:
+        if scopes == [("namespace", namespace_name)]:
             rendered.append(line)
         else:
             rendered.append(_blank_non_newlines(line))
@@ -1259,6 +1296,18 @@ def locate_unittest_regression(
                 "the executed unittest class"
             )
         if contains_anchor:
+            direct_testcase_base = (
+                len(node.bases) == 1
+                and isinstance(node.bases[0], ast.Attribute)
+                and isinstance(node.bases[0].value, ast.Name)
+                and node.bases[0].value.id == "unittest"
+                and node.bases[0].attr == "TestCase"
+            )
+            if not direct_testcase_base:
+                fail(
+                    f"{claim_id} regression class {node.name!r} must inherit "
+                    "directly from unittest.TestCase"
+                )
             for member in node.body:
                 if (
                     isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -1365,6 +1414,49 @@ def _regression_import_binding(
     return None
 
 
+def _module_mutates_binding_after_import(
+    regression_tree: ast.Module,
+    module_name: str,
+    function_name: str,
+    binding: str,
+) -> bool:
+    """Reject module-load rebinding after the reviewed import is established."""
+    import_index: int | None = None
+    for index, statement in enumerate(regression_tree.body):
+        if not isinstance(statement, ast.ImportFrom) or statement.level != 0:
+            continue
+        module_matches = statement.module == module_name
+        if statement.module == "cosmo_core":
+            module_matches = _package_reexports_function(
+                module_name,
+                function_name,
+            )
+        if not module_matches:
+            continue
+        if any(
+            alias.name == function_name
+            and (alias.asname or alias.name) == binding
+            for alias in statement.names
+        ):
+            import_index = index
+            break
+
+    if import_index is None:
+        return False
+
+    finder = _BindingMutationFinder(binding)
+    for statement in regression_tree.body[import_index + 1:]:
+        if isinstance(
+            statement,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+        ):
+            continue
+        finder.visit(statement)
+        if finder.found:
+            return True
+    return False
+
+
 class _CallFinder(ast.NodeVisitor):
     """Find one target call without descending into nested functions."""
 
@@ -1419,6 +1511,22 @@ class _CallFinder(ast.NodeVisitor):
 
     def visit_DictComp(self, node: ast.DictComp) -> None:
         self._visit_comprehension(node.generators, [node.key, node.value])
+
+    def visit_BoolOp(self, node: ast.BoolOp) -> None:
+        for value in node.values:
+            self.visit(value)
+            if self.found:
+                return
+            static_value = _static_boolean_value(
+                value,
+                self.module_constants,
+            )
+            if isinstance(node.op, ast.And):
+                if static_value is not True:
+                    return
+            elif isinstance(node.op, ast.Or):
+                if static_value is not False:
+                    return
 
     def visit_IfExp(self, node: ast.IfExp) -> None:
         condition = _static_boolean_value(node.test, self.module_constants)
@@ -2092,6 +2200,17 @@ def validate_computational_evidence_connection(
             f"does not import {function_name} from declared implementation "
             f"{implementation_path}"
         )
+    if _module_mutates_binding_after_import(
+        regression_tree,
+        module_name,
+        function_name,
+        imported_binding,
+    ):
+        fail(
+            f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
+            f"rebinds or patches imported implementation binding {imported_binding} "
+            "during module initialization"
+        )
     if _method_mutates_binding(method, imported_binding):
         fail(
             f"{claim_id} regression {regression_path}:{class_name}.{regression_anchor} "
@@ -2421,6 +2540,7 @@ def _claim_sources_text(sources: list[str]) -> str:
 
 def render_index(ledger: dict[str, Any]) -> str:
     """Render the one canonical human-readable ledger from canonical JSON."""
+    validate_ledger_fields(ledger)
     schema = require_inline_string(ledger.get("schema"), "schema")
     raw_sources = ledger.get("sources")
     raw_claims = ledger.get("claims")
@@ -2987,6 +3107,11 @@ def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
         text = re.sub(r"\\par\b", "\n\n", text)
     if suffix in {".md", ".markdown"}:
         text = re.sub(
+            r"(?m)^ {0,3}>[ \t]*$",
+            "",
+            text,
+        )
+        text = re.sub(
             r"(?m)^(?= {0,3}(?:[-+*]|[0-9]+[.)])\s+)",
             "\n\n",
             text,
@@ -3185,9 +3310,12 @@ def validate_public_claim_text(
             local_entities = public_entities(clause)
             governing_ids: set[str] = set()
             for claim_id in present_ids:
+                evidence_class = claim_classes[claim_id]
+                if evidence_class not in PUBLIC_CROSS_DOMAIN_GOVERNING_CLASSES:
+                    continue
                 if (
-                    claim_classes[claim_id]
-                    not in PUBLIC_CROSS_DOMAIN_GOVERNING_CLASSES
+                    evidence_class == "SYMBOLIC"
+                    and PUBLIC_SYMBOLIC_QUALIFIER_RE.search(binding_scope) is None
                 ):
                     continue
                 claim_domains, claim_entities = semantics.get(
@@ -3313,6 +3441,7 @@ def validate_public_documents(claim_classes: dict[str, str]) -> None:
 
 def validate() -> None:
     ledger = load_json()
+    validate_ledger_fields(ledger)
     if ledger.get("schema") != "COSMO-CLAIMS-D-1":
         fail("unexpected schema")
     if ledger.get("evidence_classes") != list(CLASSES):
