@@ -3223,15 +3223,17 @@ def validate_reviewed_computational_regression_semantics(
 ) -> None:
     """Require reviewed result assertions for claim-specific computational evidence."""
     if claim_id == "COSMO-D-003":
-        if not _reachable_assignment_from_call(
-            method.body,
-            "report",
-            imported_binding,
-            module_constants,
+        if not any(
+            _statement_assigns_call_result(
+                statement,
+                "report",
+                imported_binding,
+            )
+            for statement in method.body
         ):
             fail(
-                f"{claim_id} regression must bind report to the reviewed "
-                f"implementation return value {imported_binding}(...)"
+                f"{claim_id} regression must bind report directly to the "
+                f"reviewed implementation return value {imported_binding}(...)"
             )
         required_pairs = {
             frozenset({"report.root_count", "240"}),
