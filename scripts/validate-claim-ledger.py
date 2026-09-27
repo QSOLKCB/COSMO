@@ -35,6 +35,13 @@ PUBLIC_SYMBOLIC_QUALIFIER_RE = re.compile(
     r"(?:(?:established|biological)\s+){0,2}mechanism)\b",
     re.IGNORECASE,
 )
+PUBLIC_SYMBOLIC_PROMOTION_RE = re.compile(
+    r"\b(?:goes?\s+beyond|more\s+than|not\s+(?:merely|just|only))"
+    r"\s+(?:(?:an?|the)\s+)?symbolic(?:\s+association)?\b|"
+    r"\b(?:is|constitutes?)\s+(?:(?:an?|the)\s+)?"
+    r"(?:actual|real|established)\s+(?:biological\s+)?mechanism\b",
+    re.IGNORECASE,
+)
 PUBLIC_HYPOTHESIS_QUALIFIER_RE = re.compile(
     r"\b(?:hypothesis|hypothetical|proposed|future|could|may|might|"
     r"would|testable|tested|predictive|prediction|if)\b",
@@ -1959,6 +1966,12 @@ def _reachable_statements_call_function(
                 module_constants,
             ):
                 return True
+            final_exit = _static_selected_exit_kind(
+                statement.finalbody,
+                module_constants,
+            )
+            if final_exit is not None:
+                return False
             if body_exit in {"return", "break", "continue"}:
                 return False
             continue
@@ -2764,18 +2777,9 @@ def public_entities(text: str) -> set[str]:
 
 
 def public_claim_semantics() -> dict[str, tuple[set[str], set[str]]]:
-    """Build semantic signatures from reviewed claim records when available."""
-    ledger = load_json()
-    raw_claims = ledger.get("claims")
-    if not isinstance(raw_claims, list):
-        fail("claims must be an array")
-
+    """Build semantic signatures from the complete reviewed claim records."""
     result: dict[str, tuple[set[str], set[str]]] = {}
-    for claim in raw_claims:
-        if not isinstance(claim, dict):
-            fail("claim entries must be objects")
-        claim_id = require_inline_string(claim.get("id"), "claim id")
-        semantic_claim = PINNED_REVIEWED_CLAIM_RECORDS.get(claim_id, claim)
+    for claim_id, semantic_claim in PINNED_REVIEWED_CLAIM_RECORDS.items():
         statement = require_inline_string(
             semantic_claim.get("statement"),
             f"{claim_id} statement",
@@ -2895,6 +2899,18 @@ def public_assertion_is_negated(
         predicate_prefix,
         flags=re.IGNORECASE,
     )
+    subordinate_boundaries = list(
+        re.finditer(
+            r"\b(?:because|since|but|however|yet|although|though|"
+            r"while|whereas)\b",
+            predicate_prefix,
+            re.IGNORECASE,
+        )
+    )
+    if subordinate_boundaries:
+        predicate_prefix = predicate_prefix[
+            subordinate_boundaries[-1].end():
+        ]
     if PUBLIC_NEGATION_RE.search(predicate_prefix) is not None:
         return True
 
@@ -3127,7 +3143,7 @@ def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
             text,
         )
         text = re.sub(
-            r"(?m)^(?= {0,3}(?:[-+*]|[0-9]+[.)])\s+)",
+            r"(?m)^(?=[ \t]*(?:[-+*]|[0-9]+[.)])\s+)",
             "\n\n",
             text,
         )
@@ -3202,6 +3218,83 @@ def strip_latex_disabled_branches(text: str) -> str:
     return "".join(parts)
 
 
+def strip_latex_macro_definitions(text: str) -> str:
+    """Blank non-rendered new/renew/providecommand definitions."""
+    command_re = re.compile(
+        r"\\(?:newcommand|renewcommand|providecommand)\*?"
+    )
+    result = list(text)
+    cursor = 0
+
+    def skip_space(index: int) -> int:
+        while index < len(text) and text[index].isspace():
+            index += 1
+        return index
+
+    def braced_end(index: int) -> int | None:
+        if index >= len(text) or text[index] != "{":
+            return None
+        depth = 0
+        position = index
+        while position < len(text):
+            character = text[position]
+            escaped = (
+                position > 0
+                and text[position - 1] == "\\"
+                and (position < 2 or text[position - 2] != "\\")
+            )
+            if not escaped:
+                if character == "{":
+                    depth += 1
+                elif character == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return position + 1
+            position += 1
+        return None
+
+    while True:
+        match = command_re.search(text, cursor)
+        if match is None:
+            break
+        index = skip_space(match.end())
+
+        if index < len(text) and text[index] == "{":
+            name_end = braced_end(index)
+            if name_end is None:
+                cursor = match.end()
+                continue
+            index = skip_space(name_end)
+        elif index < len(text) and text[index] == "\\":
+            name_match = re.match(r"\\[A-Za-z@]+", text[index:])
+            if name_match is None:
+                cursor = match.end()
+                continue
+            index = skip_space(index + name_match.end())
+        else:
+            cursor = match.end()
+            continue
+
+        for _ in range(2):
+            if index >= len(text) or text[index] != "[":
+                break
+            bracket_end = text.find("]", index + 1)
+            if bracket_end == -1:
+                break
+            index = skip_space(bracket_end + 1)
+
+        body_end = braced_end(index)
+        if body_end is None:
+            cursor = match.end()
+            continue
+
+        for position in range(match.start(), body_end):
+            result[position] = "\n" if text[position] == "\n" else " "
+        cursor = body_end
+
+    return "".join(result)
+
+
 def normalize_latex_visible_text(text: str) -> str:
     """Approximate visible LaTeX prose for semantic matching."""
     text = re.sub(
@@ -3225,18 +3318,23 @@ def normalize_latex_visible_text(text: str) -> str:
 
 def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
     """Remove non-rendered comments/code before public-claim scanning."""
+    suffix = Path(path_text).suffix.lower()
+    if suffix in {".md", ".markdown"}:
+        # Fenced/indented code is literal Markdown content, so remove it
+        # before interpreting HTML comment delimiters.
+        text = strip_markdown_fenced_blocks(text)
+        text = strip_markdown_indented_code_blocks(text)
+        text = strip_markdown_link_destinations(text)
+
     text = re.sub(
         r"<!--[\s\S]*?(?:-->|$)",
         "",
         text,
     )
-    if Path(path_text).suffix.lower() in {".md", ".markdown"}:
-        text = strip_markdown_fenced_blocks(text)
-        text = strip_markdown_indented_code_blocks(text)
-        text = strip_markdown_link_destinations(text)
-    if not path_text.endswith(".tex"):
+    if suffix != ".tex":
         return text
 
+    text = strip_latex_macro_definitions(text)
     for macro, expansion in LATEX_PUBLIC_MACROS.items():
         text = re.sub(
             re.escape(macro) + r"(?![A-Za-z])",
@@ -3333,11 +3431,11 @@ def validate_public_claim_text(
                 evidence_class = claim_classes[claim_id]
                 if evidence_class not in PUBLIC_CROSS_DOMAIN_GOVERNING_CLASSES:
                     continue
-                if (
-                    evidence_class == "SYMBOLIC"
-                    and PUBLIC_SYMBOLIC_QUALIFIER_RE.search(binding_scope) is None
-                ):
-                    continue
+                if evidence_class == "SYMBOLIC":
+                    if PUBLIC_SYMBOLIC_PROMOTION_RE.search(binding_scope) is not None:
+                        continue
+                    if PUBLIC_SYMBOLIC_QUALIFIER_RE.search(binding_scope) is None:
+                        continue
                 if (
                     evidence_class == "HYPOTHESIS"
                     and PUBLIC_HYPOTHESIS_QUALIFIER_RE.search(binding_scope) is None
@@ -3453,15 +3551,33 @@ def discover_public_governed_paths(root: Path = ROOT) -> tuple[str, ...]:
     return paths
 
 
-def validate_public_documents(claim_classes: dict[str, str]) -> None:
-    """Apply the public cross-domain claim-ID guard to discovered documents."""
-    for path_text in discover_public_governed_paths():
-        path = ROOT / path_text
+def snapshot_public_documents(
+    root: Path = ROOT,
+) -> dict[str, str]:
+    """Capture governed public inputs before executable evidence can mutate them."""
+    documents: dict[str, str] = {}
+    for path_text in discover_public_governed_paths(root):
+        path = root / path_text
         try:
-            text = path.read_text(encoding="utf-8")
+            documents[path_text] = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
             fail(f"cannot read governed public document {path_text}: {exc}")
-        validate_public_claim_text(path_text, text, claim_classes)
+    return documents
+
+
+def validate_public_documents(
+    claim_classes: dict[str, str],
+    documents: dict[str, str] | None = None,
+) -> None:
+    """Apply the public claim-ID guard to a stable document snapshot."""
+    if documents is None:
+        documents = snapshot_public_documents()
+    for path_text in sorted(documents):
+        validate_public_claim_text(
+            path_text,
+            documents[path_text],
+            claim_classes,
+        )
 
 
 def validate() -> None:
@@ -3471,6 +3587,12 @@ def validate() -> None:
         fail("unexpected schema")
     if ledger.get("evidence_classes") != list(CLASSES):
         fail("evidence class order or membership changed")
+
+    public_documents = snapshot_public_documents()
+    index_path_text = INDEX_PATH.relative_to(ROOT).as_posix()
+    index_text = public_documents.get(index_path_text)
+    if index_text is None:
+        fail("canonical Markdown index is missing from public document snapshot")
 
     sources = ledger.get("sources")
     claims = ledger.get("claims")
@@ -3618,12 +3740,8 @@ def validate() -> None:
             )
 
     validate_reviewed_claim_inventory(claim_ids)
-    validate_public_documents(claim_classes)
+    validate_public_documents(claim_classes, public_documents)
 
-    try:
-        index_text = INDEX_PATH.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        fail(f"cannot read canonical Markdown index: {exc}")
     expected_index = render_index(ledger)
     if index_text != expected_index:
         fail(
