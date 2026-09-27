@@ -600,6 +600,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"governs?|governed|influences?|influenced|"
     r"leads?\s+to|results?\s+in|gives?\s+rise\s+to|"
     r"contributes?\s+to|corresponds?\s+to|maps?\s+to|"
+    r"(?:is|are|was|were)\s+necessary\s+for|"
     r"is\s+(?:an?\s+|the\s+)?mechanism\s+(?:for|of|behind)|"
     r"mechanism\s+(?:connects?|links?|drives?|causes?)|"
     r"is\s+responsible\s+for)\b",
@@ -1954,6 +1955,20 @@ def _statements_may_raise(
     return False
 
 
+def _with_expects_exception(statement: ast.With) -> bool:
+    for item in statement.items:
+        context = item.context_expr
+        if not isinstance(context, ast.Call):
+            continue
+        func = context.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in {"assertRaises", "assertRaisesRegex"}
+        ):
+            return True
+    return False
+
+
 def _reachable_statements_call_function(
     statements: list[ast.stmt],
     function_name: str,
@@ -2062,6 +2077,24 @@ def _reachable_statements_call_function(
                 return True
             continue
 
+        if isinstance(statement, ast.With):
+            for item in statement.items:
+                if _expression_calls_function(
+                    item.context_expr,
+                    function_name,
+                    module_constants,
+                ):
+                    return True
+            if _with_expects_exception(statement):
+                continue
+            if _reachable_statements_call_function(
+                statement.body,
+                function_name,
+                module_constants,
+            ):
+                return True
+            continue
+
         if isinstance(statement, ast.Try):
             if _reachable_statements_call_function(
                 statement.body,
@@ -2151,6 +2184,15 @@ class _BindingMutationFinder(ast.NodeVisitor):
         if (
             isinstance(func, ast.Name)
             and func.id in {"setattr", "delattr"}
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in self.aliases
+        ):
+            self.found = True
+            return
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in {"__setattr__", "__delattr__"}
             and node.args
             and isinstance(node.args[0], ast.Name)
             and node.args[0].id in self.aliases
