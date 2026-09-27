@@ -2917,7 +2917,7 @@ def validate_provenance(
                     f"{claim_id} provenance path {path_text!r} was not "
                     "captured before evidence execution"
                 )
-            text = cast(str, snapshot_text)
+            text = snapshot_text
         if evidence_class == "FORMAL":
             validate_formal_provenance_target(
                 claim_id,
