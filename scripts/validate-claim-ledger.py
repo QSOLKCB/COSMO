@@ -5556,7 +5556,6 @@ def strip_markdown_fenced_blocks(text: str) -> str:
 
 
 def strip_latex_disabled_branches(text: str) -> str:
-def strip_latex_disabled_branches(text: str) -> str:
     """Blank known-disabled TeX conditionals while preserving visible else branches."""
     token_re = re.compile(
         r"\\ifnum\s*([+-]?\d+)\s*(=|<|>)\s*([+-]?\d+)|"
