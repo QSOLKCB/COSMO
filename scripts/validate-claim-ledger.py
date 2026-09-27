@@ -559,7 +559,7 @@ PUBLIC_ASSERTION_RE = re.compile(
     r"demonstrates?|demonstrated|establishes?|established|"
     r"validates?|validated|predicts?|predicted|induces?|induced|"
     r"triggers?|triggered|promotes?|promoted|mediates?|mediated|"
-    r"enables?|enabled|"
+    r"enables?|enabled|activates?|activated|"
     r"controls?\s+(?=(?:(?:the|an?|this|that)\s+)?"
     r"(?:(?:[A-Za-z][A-Za-z0-9_-]*|of)\s+){0,5}"
     r"(?:HPV16|HPV|capsid|E6|E7|p16|SiS2|SiS_2|silicon\s+disulfide|"
@@ -1300,14 +1300,27 @@ def _static_boolean_value(
         and len(expression.ops) == 1
         and len(expression.comparators) == 1
     ):
+        comparator = expression.comparators[0]
+        operator = expression.ops[0]
+        if isinstance(expression.left, ast.Constant) and isinstance(
+            comparator,
+            ast.Constant,
+        ):
+            left_literal = expression.left.value
+            right_literal = comparator.value
+            if isinstance(operator, ast.Eq):
+                return left_literal == right_literal
+            if isinstance(operator, ast.NotEq):
+                return left_literal != right_literal
+            if isinstance(operator, ast.Is):
+                return left_literal is right_literal
+            if isinstance(operator, ast.IsNot):
+                return left_literal is not right_literal
+
         left = _static_boolean_value(expression.left, module_constants)
-        right = _static_boolean_value(
-            expression.comparators[0],
-            module_constants,
-        )
+        right = _static_boolean_value(comparator, module_constants)
         if left is None or right is None:
             return None
-        operator = expression.ops[0]
         if isinstance(operator, (ast.Is, ast.Eq)):
             return left == right
         if isinstance(operator, (ast.IsNot, ast.NotEq)):
@@ -1347,6 +1360,29 @@ def _static_iterable_has_items(expression: ast.expr) -> bool | None:
     return None
 
 
+def _static_selected_exit_kind(
+    statements: list[ast.stmt],
+    module_constants: dict[str, bool],
+) -> str | None:
+    """Return an obvious unconditional exit selected by static conditions."""
+    for statement in statements:
+        if isinstance(statement, (ast.Return, ast.Raise)):
+            return "return"
+        if isinstance(statement, ast.Break):
+            return "break"
+        if isinstance(statement, ast.Continue):
+            return "continue"
+        if isinstance(statement, ast.If):
+            condition = _static_boolean_value(statement.test, module_constants)
+            if condition is None:
+                continue
+            branch = statement.body if condition else statement.orelse
+            exit_kind = _static_selected_exit_kind(branch, module_constants)
+            if exit_kind is not None:
+                return exit_kind
+    return None
+
+
 def _reachable_statements_call_function(
     statements: list[ast.stmt],
     function_name: str,
@@ -1369,6 +1405,8 @@ def _reachable_statements_call_function(
                     module_constants,
                 ):
                     return True
+                if _static_selected_exit_kind(branch, module_constants) is not None:
+                    return False
             else:
                 if _reachable_statements_call_function(
                     statement.body,
@@ -1492,6 +1530,12 @@ class _BindingMutationFinder(ast.NodeVisitor):
 
     def visit_With(self, node: ast.With) -> None:
         for item in node.items:
+            if (
+                item.optional_vars is not None
+                and self._target_mentions_binding(item.optional_vars)
+            ):
+                self.found = True
+                return
             context = item.context_expr
             if not isinstance(context, ast.Call):
                 continue
@@ -1520,6 +1564,20 @@ class _BindingMutationFinder(ast.NodeVisitor):
                 self.found = True
                 return
         self.generic_visit(node)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            bound_name = alias.asname or alias.name.split(".", 1)[0]
+            if bound_name == self.binding:
+                self.found = True
+                return
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for alias in node.names:
+            bound_name = alias.asname or alias.name
+            if bound_name == self.binding:
+                self.found = True
+                return
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         return
@@ -1652,6 +1710,25 @@ def validate_computational_implementation_target(
             f"{claim_id} implementation anchor {anchor!r} must identify "
             f"exactly one top-level function in {path_text}"
         )
+
+    definition = matches[0]
+    definition_index = tree.body.index(definition)
+    mutation_finder = _BindingMutationFinder(function_name)
+    for statement in tree.body[definition_index + 1:]:
+        if isinstance(
+            statement,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+        ) and statement.name == function_name:
+            fail(
+                f"{claim_id} implementation export {function_name!r} is "
+                f"rebound after its reviewed definition in {path_text}"
+            )
+        mutation_finder.visit(statement)
+        if mutation_finder.found:
+            fail(
+                f"{claim_id} implementation export {function_name!r} is "
+                f"rebound after its reviewed definition in {path_text}"
+            )
 
 
 def validate_computational_regression_target(
@@ -2126,18 +2203,42 @@ def paragraph_domains(text: str) -> set[str]:
     }
 
 
+def _public_left_clause_boundary(text: str, predicate_start: int) -> int:
+    """Find the left proposition boundary without splitting coordinated subjects."""
+    left_boundary = 0
+    for boundary in re.finditer(
+        r"(?:[.!?;,|&]|\b(?:but|however|yet|although|though|while|whereas)\b)",
+        text[:predicate_start],
+        re.IGNORECASE,
+    ):
+        left_boundary = boundary.end()
+
+    base = left_boundary
+    prefix = text[base:predicate_start]
+    for conjunction in re.finditer(r"\band\b", prefix, re.IGNORECASE):
+        absolute_start = base + conjunction.start()
+        absolute_end = base + conjunction.end()
+        before = text[left_boundary:absolute_start]
+        if (
+            PUBLIC_ASSERTION_RE.search(before) is not None
+            or re.search(
+                r"\b(?:has|have|had|is|are|was|were|does|do|did|"
+                r"can|could|may|might|will|would|should|"
+                r"documents?|records?|states?|notes?|describes?|mentions?)\b",
+                before,
+                re.IGNORECASE,
+            ) is not None
+        ):
+            left_boundary = absolute_end
+    return left_boundary
+
+
 def public_assertion_clause(
     text: str,
     assertion: re.Match[str],
 ) -> str:
     """Return the proposition containing one assertion predicate."""
-    left_boundary = 0
-    for boundary in re.finditer(
-        r"(?:[.!?;,|&]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
-        text[:assertion.start()],
-        re.IGNORECASE,
-    ):
-        left_boundary = boundary.end()
+    left_boundary = _public_left_clause_boundary(text, assertion.start())
 
     right_match = re.search(
         r"(?:[.!?;,|&]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
@@ -2157,13 +2258,7 @@ def public_assertion_binding_scope(
     assertion: re.Match[str],
 ) -> str:
     """Return the punctuation-bounded proposition used to bind a claim ID."""
-    left_boundary = 0
-    for boundary in re.finditer(
-        r"(?:[.!?;,|]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
-        text[:assertion.start()],
-        re.IGNORECASE,
-    ):
-        left_boundary = boundary.end()
+    left_boundary = _public_left_clause_boundary(text, assertion.start())
 
     right_match = re.search(
         r"(?:[.!?;,|]|\b(?:and|but|however|yet)\b)",
@@ -2182,17 +2277,17 @@ def public_assertion_is_negated(
     assertion: re.Match[str],
 ) -> bool:
     """Return whether negation locally governs the assertion predicate."""
-    prefix_start = 0
-    for boundary in re.finditer(
-        r"(?:[.!?;,|]|\b(?:and|but|however|yet|although|though|while|whereas)\b)",
-        text[:assertion.start()],
-        re.IGNORECASE,
-    ):
-        prefix_start = boundary.end()
+    prefix_start = _public_left_clause_boundary(text, assertion.start())
     predicate_prefix = text[prefix_start:assertion.start()]
     predicate_prefix = re.sub(
         r"\bnot\s+only\b",
         "only",
+        predicate_prefix,
+        flags=re.IGNORECASE,
+    )
+    predicate_prefix = re.sub(
+        r"\bno\s+doubt(?:\s+that)?\b",
+        "",
         predicate_prefix,
         flags=re.IGNORECASE,
     )
@@ -2247,7 +2342,7 @@ def strip_markdown_indented_code_blocks(text: str) -> str:
 def strip_markdown_link_destinations(text: str) -> str:
     """Preserve visible labels while removing non-rendered link destinations."""
     text = re.sub(
-        r"(?m)^ {0,3}\[[^\]\n]+\]:\s*\S+.*$",
+        r"(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*\S+.*$",
         lambda match: _blank_non_newlines(match.group(0)),
         text,
     )
@@ -2264,9 +2359,24 @@ class _VisibleHTMLTextParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
+        self.raw_text_depth = 0
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        del attrs
+        if tag.lower() in {"script", "style"}:
+            self.raw_text_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in {"script", "style"} and self.raw_text_depth:
+            self.raw_text_depth -= 1
 
     def handle_data(self, data: str) -> None:
-        self.parts.append(data)
+        if self.raw_text_depth == 0:
+            self.parts.append(data)
 
     def handle_entityref(self, name: str) -> None:
         self.parts.append(html.unescape(f"&{name};"))
@@ -2309,6 +2419,11 @@ def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
             r"\1\2\n",
             text,
         )
+        text = re.sub(
+            r"(?m)^( {0,3}[^\n]+\n {0,3}(?:=+|-+)[ \t]*)(\n|$)",
+            r"\1\2\n",
+            text,
+        )
     return re.split(r"\n\s*\n", text)
 
 
@@ -2342,6 +2457,45 @@ def strip_markdown_fenced_blocks(text: str) -> str:
     return "".join(lines)
 
 
+def strip_latex_disabled_branches(text: str) -> str:
+    """Blank known-disabled TeX conditionals while preserving visible else branches."""
+    token_re = re.compile(r"\\(?:iftrue|iffalse|else|fi)\b")
+    stack: list[tuple[bool, bool]] = []
+    active = True
+    parts: list[str] = []
+    cursor = 0
+    for match in token_re.finditer(text):
+        chunk = text[cursor:match.start()]
+        parts.append(chunk if active else _blank_non_newlines(chunk))
+        token = match.group(0).lower()
+        parts.append(_blank_non_newlines(match.group(0)))
+        if token in {"\\iftrue", "\\iffalse"}:
+            condition = token == "\\iftrue"
+            stack.append((active, condition))
+            active = active and condition
+        elif token == "\\else" and stack:
+            parent_active, condition = stack[-1]
+            active = parent_active and not condition
+        elif token == "\\fi" and stack:
+            parent_active, _condition = stack.pop()
+            active = parent_active
+        cursor = match.end()
+    tail = text[cursor:]
+    parts.append(tail if active else _blank_non_newlines(tail))
+    return "".join(parts)
+
+
+def normalize_latex_visible_text(text: str) -> str:
+    """Approximate visible LaTeX prose for semantic matching."""
+    text = re.sub(
+        r"\\(?:textbf|textit|emph|textrm|textsf|texttt|textnormal|underline)"
+        r"(?![A-Za-z])\s*",
+        "",
+        text,
+    )
+    return text.replace("{", "").replace("}", "")
+
+
 def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
     """Remove non-rendered comments/code before public-claim scanning."""
     text = re.sub(
@@ -2362,6 +2516,7 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
             expansion,
             text,
         )
+    text = strip_latex_disabled_branches(text)
 
     lines: list[str] = []
     for line in text.splitlines(keepends=True):
@@ -2396,8 +2551,11 @@ def validate_public_claim_text(
     rendered_text = html.unescape(
         strip_public_nonrendered_comments(path_text, text)
     )
-    if Path(path_text).suffix.lower() in {".md", ".markdown"}:
+    suffix = Path(path_text).suffix.lower()
+    if suffix in {".md", ".markdown"}:
         rendered_text = normalize_markdown_visible_text(rendered_text)
+    elif suffix == ".tex":
+        rendered_text = normalize_latex_visible_text(rendered_text)
     paragraphs = split_public_rendered_blocks(path_text, rendered_text)
     for paragraph_number, paragraph in enumerate(paragraphs, start=1):
         compact = " ".join(paragraph.split())
