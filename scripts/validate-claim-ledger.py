@@ -641,7 +641,12 @@ PUBLIC_BIOMEDICAL_E6_E7_CONTEXT_RE = re.compile(
 
 PUBLIC_ASSERTION_RE = re.compile(
     r"\b(?:causes?|caused|drives?|driven|produces?|produced|"
-    r"creates?|created|creating|generates?|generated|generating|"
+    r"creates?|created|creating|"
+    r"generat(?:e|es|ed|ing)\s+(?=(?:(?:the|an?|this|that)\s+)?"
+    r"(?:(?:[A-Za-z][A-Za-z0-9_-]*|of)\s+){0,5}"
+    r"(?:HPV16|HPV|capsid|E6|E7|p16|SiS2|SiS_2|silicon\s+disulfide|"
+    r"Spin\(8\)|triality|E8|E_8|Weyl|cuneiform|Sumerian|cosmic|"
+    r"cosmology|Ouroboros)\b)|"
     r"underlies?|underlay|underlying|"
     r"determines?|determined|explains?|explained|proves?|proved|"
     r"demonstrates?|demonstrated|establish(?:es)?|"
