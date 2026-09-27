@@ -641,7 +641,8 @@ PUBLIC_BIOMEDICAL_E6_E7_CONTEXT_RE = re.compile(
 
 PUBLIC_ASSERTION_RE = re.compile(
     r"\b(?:causes?|caused|drives?|driven|produces?|produced|"
-    r"creates?|created|creating|underlies?|underlay|underlying|"
+    r"creates?|created|creating|generates?|generated|generating|"
+    r"underlies?|underlay|underlying|"
     r"determines?|determined|explains?|explained|proves?|proved|"
     r"demonstrates?|demonstrated|establish(?:es)?|"
     r"validates?|validated|predicts?|predicted|induces?|induced|"
@@ -1454,6 +1455,10 @@ UNITTEST_DISPATCH_HOOKS = frozenset(
 )
 UNITTEST_ASSERTION_HOOKS = frozenset({"assertEqual", "assertTrue"})
 UNITTEST_PROTECTED_HOOKS = UNITTEST_DISPATCH_HOOKS | UNITTEST_ASSERTION_HOOKS
+UNITTEST_PROTECTED_INSTANCE_STATE = frozenset({"_type_equality_funcs"})
+UNITTEST_PROTECTED_INSTANCE_NAMES = (
+    UNITTEST_PROTECTED_HOOKS | UNITTEST_PROTECTED_INSTANCE_STATE
+)
 
 
 def _is_unittest_testcase_expression(node: ast.expr) -> bool:
@@ -1485,7 +1490,7 @@ class _UnittestDispatchMutationFinder(ast.NodeVisitor):
     def _target_is_dispatch_hook(self, target: ast.expr) -> bool:
         return (
             isinstance(target, ast.Attribute)
-            and target.attr in UNITTEST_PROTECTED_HOOKS
+            and target.attr in UNITTEST_PROTECTED_INSTANCE_NAMES
             and self._is_dispatch_target(target.value)
         )
 
@@ -1786,6 +1791,26 @@ class _UnittestInstanceMutationFinder(ast.NodeVisitor):
             return
         self.generic_visit(node)
 
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if (
+            self._is_instance(node.value)
+            and node.attr in UNITTEST_PROTECTED_INSTANCE_STATE
+        ):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        if (
+            isinstance(node.value, ast.Attribute)
+            and self._is_instance(node.value.value)
+            and node.value.attr == "__dict__"
+            and _static_string_value(node.slice) in UNITTEST_PROTECTED_INSTANCE_STATE
+        ):
+            self.found = True
+            return
+        self.generic_visit(node)
+
     def visit_Call(self, node: ast.Call) -> None:
         if (
             isinstance(node.func, ast.Name)
@@ -1794,7 +1819,7 @@ class _UnittestInstanceMutationFinder(ast.NodeVisitor):
             and self._is_instance(node.args[0])
         ):
             attribute_name = _static_string_value(node.args[1])
-            if attribute_name is None or attribute_name in UNITTEST_PROTECTED_HOOKS:
+            if attribute_name is None or attribute_name in UNITTEST_PROTECTED_INSTANCE_NAMES:
                 self.found = True
                 return
         if (
@@ -4372,6 +4397,9 @@ def _run_regression():
         return 21
 
     case = case_type(anchor)
+    equality_dispatch_before = dict(
+        case.__dict__.get("_type_equality_funcs", {})
+    )
     if any(name in case.__dict__ for name in protected_instance_names):
         print("claimed test instance shadows protected unittest behavior", file=sys.stderr)
         return 29
@@ -4382,6 +4410,13 @@ def _run_regression():
     if any(name in case.__dict__ for name in protected_instance_names):
         print("test execution shadows protected unittest behavior", file=sys.stderr)
         return 30
+    equality_dispatch_after = case.__dict__.get("_type_equality_funcs")
+    if (
+        not isinstance(equality_dispatch_after, dict)
+        or equality_dispatch_after != equality_dispatch_before
+    ):
+        print("test execution mutated equality dispatch state", file=sys.stderr)
+        return 31
     if result.testsRun != 1:
         print(f"testsRun={result.testsRun}", file=sys.stderr)
         return 22
@@ -5242,6 +5277,14 @@ class _VisibleHTMLTextParser(HTMLParser):
         }
     )
 
+    VISIBLE_INPUT_VALUE_TYPES = frozenset(
+        {
+            "button", "submit", "reset", "text", "search", "email",
+            "url", "tel", "number", "date", "datetime-local", "month",
+            "week", "time",
+        }
+    )
+
     VOID_TAGS = frozenset(
         {
             "area",
@@ -5294,7 +5337,12 @@ class _VisibleHTMLTextParser(HTMLParser):
                 return
 
     def _close_implied_by_start(self, normalized: str) -> None:
-        if normalized == "option":
+        if normalized in {"rt", "rp"}:
+            self._close_nearest_optional(
+                frozenset({"rt", "rp"}),
+                frozenset({"ruby", "template"}),
+            )
+        elif normalized == "option":
             self._close_nearest_optional(
                 frozenset({"option"}),
                 frozenset({"select", "datalist", "optgroup", "template"}),
@@ -5358,18 +5406,12 @@ class _VisibleHTMLTextParser(HTMLParser):
     ) -> None:
         normalized = tag.lower()
         self._close_implied_by_start(normalized)
-        hidden_attribute = any(
-            name.lower() == "hidden"
-            for name, _value in attrs
-        )
-        style_value = next(
-            (
-                value
-                for name, value in attrs
-                if name.lower() == "style" and value is not None
-            ),
-            "",
-        )
+        attribute_map = {
+            name.lower(): value
+            for name, value in attrs
+        }
+        hidden_attribute = "hidden" in attribute_map
+        style_value = attribute_map.get("style") or ""
         css_hidden = re.search(
             r"(?:^|;)\s*(?:display\s*:\s*none|"
             r"visibility\s*:\s*hidden)"
@@ -5391,6 +5433,15 @@ class _VisibleHTMLTextParser(HTMLParser):
             ):
                 if normalized == "br":
                     self.parts.append(" ")
+                elif normalized == "input":
+                    input_type = (attribute_map.get("type") or "text").casefold()
+                    value = attribute_map.get("value")
+                    if (
+                        value
+                        and input_type in self.VISIBLE_INPUT_VALUE_TYPES
+                    ):
+                        self.parts.append(value)
+                        self.parts.append(" ")
                 elif normalized in self.BLOCK_TAGS:
                     self._append_block_boundary()
             return
@@ -5555,25 +5606,46 @@ def strip_markdown_fenced_blocks(text: str) -> str:
     return "".join(lines)
 
 
-def strip_latex_disabled_branches(text: str) -> str:
-    """Blank known-disabled TeX conditionals while preserving visible else branches."""
+def strip_latex_disabled_branches(
+    text: str,
+    defined_commands: set[str] | None = None,
+) -> str:
+    """Blank statically disabled TeX conditionals while preserving visible branches."""
+    known_defined = set(LATEX_PUBLIC_MACROS)
+    known_defined.update(
+        {
+            r"\textbf", r"\textit", r"\emph", r"\textrm",
+            r"\textsf", r"\texttt", r"\textnormal", r"\underline",
+            r"\mbox", r"\mathrm", r"\mathbf", r"\mathit",
+            r"\mathsf", r"\mathtt", r"\mathnormal", r"\operatorname",
+            r"\mathcal", r"\mathbb", r"\mathfrak", r"\href",
+            r"\textcolor", r"\input", r"\include", r"\usepackage",
+            r"\newcommand", r"\renewcommand", r"\providecommand", r"\def",
+        }
+    )
+    if defined_commands is not None:
+        known_defined.update(defined_commands)
+
     token_re = re.compile(
-        r"\\ifnum\s*([+-]?\d+)\s*(=|<|>)\s*([+-]?\d+)|"
-        r"\\(?:iftrue|iffalse|else|fi)\b"
+        r"(?P<ifnum>\\ifnum\s*(?P<left>[+-]?\d+)\s*"
+        r"(?P<operator>=|<|>)\s*(?P<right>[+-]?\d+))|"
+        r"(?P<ifdefined>\\ifdefined\s*(?P<command>\\[A-Za-z@]+))|"
+        r"(?P<literal>\\(?:iftrue|iffalse|else|fi)\b)"
     )
     stack: list[tuple[bool, bool]] = []
     active = True
     parts: list[str] = []
     cursor = 0
+
     for match in token_re.finditer(text):
         chunk = text[cursor:match.start()]
         parts.append(chunk if active else _blank_non_newlines(chunk))
-        token = match.group(0).lower()
         parts.append(_blank_non_newlines(match.group(0)))
-        if match.group(1) is not None:
-            left = int(match.group(1))
-            operator = cast(str, match.group(2))
-            right = int(cast(str, match.group(3)))
+
+        if match.group("ifnum") is not None:
+            left = int(cast(str, match.group("left")))
+            operator = cast(str, match.group("operator"))
+            right = int(cast(str, match.group("right")))
             condition = (
                 left == right
                 if operator == "="
@@ -5583,82 +5655,133 @@ def strip_latex_disabled_branches(text: str) -> str:
             )
             stack.append((active, condition))
             active = active and condition
-        elif token in {"\\iftrue", "\\iffalse"}:
-            condition = token == "\\iftrue"
+        elif match.group("ifdefined") is not None:
+            command = cast(str, match.group("command"))
+            condition = command in known_defined
             stack.append((active, condition))
             active = active and condition
-        elif token == "\\else" and stack:
-            parent_active, condition = stack[-1]
-            active = parent_active and not condition
-        elif token == "\\fi" and stack:
-            parent_active, _condition = stack.pop()
-            active = parent_active
+        else:
+            token = cast(str, match.group("literal")).lower()
+            if token in {"\\iftrue", "\\iffalse"}:
+                condition = token == "\\iftrue"
+                stack.append((active, condition))
+                active = active and condition
+            elif token == "\\else" and stack:
+                parent_active, condition = stack[-1]
+                active = parent_active and not condition
+            elif token == "\\fi" and stack:
+                parent_active, _condition = stack.pop()
+                active = parent_active
         cursor = match.end()
+
     tail = text[cursor:]
     parts.append(tail if active else _blank_non_newlines(tail))
     return "".join(parts)
 
 
-def latex_user_macro_definitions(
-    text: str,
-) -> dict[str, tuple[int, str, str | None]]:
-    """Extract simple zero-to-nine-argument user macros and rendered bodies."""
-    command_re = re.compile(
-        r"\\(?:newcommand|renewcommand|providecommand)\*?"
-    )
-    macros: dict[str, tuple[int, str, str | None]] = {}
-    cursor = 0
+def _latex_skip_space(text: str, index: int) -> int:
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
 
-    def skip_space(index: int) -> int:
-        while index < len(text) and text[index].isspace():
-            index += 1
-        return index
 
-    def braced_end(index: int) -> int | None:
-        if index >= len(text) or text[index] != "{":
-            return None
-        depth = 0
-        position = index
-        while position < len(text):
-            character = text[position]
-            escaped = (
-                position > 0
-                and text[position - 1] == "\\"
-                and (position < 2 or text[position - 2] != "\\")
-            )
-            if not escaped:
-                if character == "{":
-                    depth += 1
-                elif character == "}":
-                    depth -= 1
-                    if depth == 0:
-                        return position + 1
-            position += 1
+def _latex_braced_end(text: str, index: int) -> int | None:
+    if index >= len(text) or text[index] != "{":
         return None
+    depth = 0
+    position = index
+    while position < len(text):
+        character = text[position]
+        escaped = (
+            position > 0
+            and text[position - 1] == "\\"
+            and (position < 2 or text[position - 2] != "\\")
+        )
+        if not escaped:
+            if character == "{":
+                depth += 1
+            elif character == "}":
+                depth -= 1
+                if depth == 0:
+                    return position + 1
+        position += 1
+    return None
+
+
+def _latex_macro_definition_records(
+    text: str,
+) -> list[tuple[int, int, str, int, str, str | None]]:
+    """Parse supported LaTeX and primitive TeX macro definitions."""
+    command_re = re.compile(
+        r"\\(?:newcommand|renewcommand|providecommand)\*?|\\def\b"
+    )
+    records: list[tuple[int, int, str, int, str, str | None]] = []
+    cursor = 0
 
     while True:
         match = command_re.search(text, cursor)
         if match is None:
             break
-        index = skip_space(match.end())
-        macro_name: str | None = None
+        command = match.group(0)
+        index = _latex_skip_space(text, match.end())
 
+        if command.startswith("\\def"):
+            name_match = re.match(r"\\[A-Za-z@]+", text[index:])
+            if name_match is None:
+                cursor = match.end()
+                continue
+            macro_name = name_match.group(0)
+            index += name_match.end()
+
+            parameter_numbers: list[int] = []
+            while True:
+                index = _latex_skip_space(text, index)
+                parameter_match = re.match(r"#([1-9])", text[index:])
+                if parameter_match is None:
+                    break
+                parameter_numbers.append(int(parameter_match.group(1)))
+                index += parameter_match.end()
+
+            if parameter_numbers != list(
+                range(1, len(parameter_numbers) + 1)
+            ):
+                cursor = match.end()
+                continue
+            index = _latex_skip_space(text, index)
+            body_end = _latex_braced_end(text, index)
+            if body_end is None:
+                cursor = match.end()
+                continue
+            records.append(
+                (
+                    match.start(),
+                    body_end,
+                    macro_name,
+                    len(parameter_numbers),
+                    text[index + 1:body_end - 1],
+                    None,
+                )
+            )
+            cursor = body_end
+            continue
+
+        macro_name: str | None = None
         if index < len(text) and text[index] == "{":
-            name_end = braced_end(index)
+            name_end = _latex_braced_end(text, index)
             if name_end is None:
                 cursor = match.end()
                 continue
             raw_name = text[index + 1:name_end - 1].strip()
             if re.fullmatch(r"\\[A-Za-z@]+", raw_name):
                 macro_name = raw_name
-            index = skip_space(name_end)
+            index = _latex_skip_space(text, name_end)
         elif index < len(text) and text[index] == "\\":
             name_match = re.match(r"\\[A-Za-z@]+", text[index:])
             if name_match is None:
                 cursor = match.end()
                 continue
             macro_name = name_match.group(0)
-            index = skip_space(index + name_match.end())
+            index = _latex_skip_space(text, index + name_match.end())
         else:
             cursor = match.end()
             continue
@@ -5678,7 +5801,7 @@ def latex_user_macro_definitions(
             if argument_count > 9:
                 cursor = match.end()
                 continue
-            index = skip_space(bracket_end + 1)
+            index = _latex_skip_space(text, bracket_end + 1)
             if index < len(text) and text[index] == "[":
                 if argument_count == 0:
                     cursor = match.end()
@@ -5688,20 +5811,45 @@ def latex_user_macro_definitions(
                     cursor = match.end()
                     continue
                 default_argument = text[index + 1:default_end]
-                index = skip_space(default_end + 1)
+                index = _latex_skip_space(text, default_end + 1)
 
-        body_end = braced_end(index)
-        if body_end is None:
+        body_end = _latex_braced_end(text, index)
+        if body_end is None or macro_name is None:
             cursor = match.end()
             continue
-        if macro_name is not None:
-            macros[macro_name] = (
+        records.append(
+            (
+                match.start(),
+                body_end,
+                macro_name,
                 argument_count,
                 text[index + 1:body_end - 1],
                 default_argument,
             )
+        )
         cursor = body_end
 
+    return records
+
+
+def latex_user_macro_definitions(
+    text: str,
+) -> dict[str, tuple[int, str, str | None]]:
+    """Extract supported user macros in source order."""
+    macros: dict[str, tuple[int, str, str | None]] = {}
+    for (
+        _start,
+        _end,
+        macro_name,
+        argument_count,
+        body,
+        default_argument,
+    ) in _latex_macro_definition_records(text):
+        macros[macro_name] = (
+            argument_count,
+            body,
+            default_argument,
+        )
     return macros
 
 
@@ -5849,79 +5997,13 @@ def expand_latex_user_macros(
 
 
 def strip_latex_macro_definitions(text: str) -> str:
-    """Blank non-rendered new/renew/providecommand definitions."""
-    command_re = re.compile(
-        r"\\(?:newcommand|renewcommand|providecommand)\*?"
-    )
+    """Blank non-rendered supported TeX/LaTeX macro definitions."""
     result = list(text)
-    cursor = 0
-
-    def skip_space(index: int) -> int:
-        while index < len(text) and text[index].isspace():
-            index += 1
-        return index
-
-    def braced_end(index: int) -> int | None:
-        if index >= len(text) or text[index] != "{":
-            return None
-        depth = 0
-        position = index
-        while position < len(text):
-            character = text[position]
-            escaped = (
-                position > 0
-                and text[position - 1] == "\\"
-                and (position < 2 or text[position - 2] != "\\")
-            )
-            if not escaped:
-                if character == "{":
-                    depth += 1
-                elif character == "}":
-                    depth -= 1
-                    if depth == 0:
-                        return position + 1
-            position += 1
-        return None
-
-    while True:
-        match = command_re.search(text, cursor)
-        if match is None:
-            break
-        index = skip_space(match.end())
-
-        if index < len(text) and text[index] == "{":
-            name_end = braced_end(index)
-            if name_end is None:
-                cursor = match.end()
-                continue
-            index = skip_space(name_end)
-        elif index < len(text) and text[index] == "\\":
-            name_match = re.match(r"\\[A-Za-z@]+", text[index:])
-            if name_match is None:
-                cursor = match.end()
-                continue
-            index = skip_space(index + name_match.end())
-        else:
-            cursor = match.end()
-            continue
-
-        for _ in range(2):
-            if index >= len(text) or text[index] != "[":
-                break
-            bracket_end = text.find("]", index + 1)
-            if bracket_end == -1:
-                break
-            index = skip_space(bracket_end + 1)
-
-        body_end = braced_end(index)
-        if body_end is None:
-            cursor = match.end()
-            continue
-
-        for position in range(match.start(), body_end):
+    for start, end, _name, _count, _body, _default in (
+        _latex_macro_definition_records(text)
+    ):
+        for position in range(start, end):
             result[position] = "\n" if text[position] == "\n" else " "
-        cursor = body_end
-
     return "".join(result)
 
 
@@ -5950,7 +6032,9 @@ def normalize_latex_visible_text(text: str) -> str:
         text,
     )
     text = re.sub(
-        r"\\(?:textbf|textit|emph|textrm|textsf|texttt|textnormal|underline|mbox)"
+        r"\\(?:textbf|textit|emph|textrm|textsf|texttt|textnormal|"
+        r"underline|mbox|mathrm|mathbf|mathit|mathsf|mathtt|mathnormal|"
+        r"operatorname|mathcal|mathbb|mathfrak)"
         r"(?![A-Za-z])\s*",
         "",
         text,
@@ -6010,7 +6094,7 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
             expansion,
             text,
         )
-    text = strip_latex_disabled_branches(text)
+    text = strip_latex_disabled_branches(text, set(user_macros))
     text = re.sub(
         r"\\label\s*\{[^{}\n]*\}",
         lambda match: _blank_non_newlines(match.group(0)),

@@ -4782,5 +4782,141 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                     validate_public_claim_text("sample.md", source, {})
 
 
+    def test_public_claim_guard_expands_primitive_tex_def(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                (
+                    r"\def\bridge#1{Spin(8) triality causes #1.}"
+                    "\n\n"
+                    r"\bridge{HPV16 capsid assembly}"
+                ),
+                {},
+            )
+
+    def test_public_html_ruby_implied_end_reveals_visible_text(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.html",
+                (
+                    "<ruby><rt hidden>draft<rt>"
+                    "Spin(8) triality causes HPV16 capsid assembly.</ruby>"
+                ),
+                {},
+            )
+
+    def test_public_claim_guard_detects_generation_predicates(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        for source in (
+            "Spin(8) triality generates HPV16 capsid assembly.",
+            "Spin(8) triality generated HPV16 capsid assembly.",
+        ):
+            with self.subTest(source=source):
+                with self.assertRaises(SystemExit):
+                    validate_public_claim_text("sample.md", source, {})
+
+    def test_public_html_input_button_value_is_visible_text(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.html",
+                (
+                    '<input type="button" '
+                    'value="Spin(8) triality causes HPV16 capsid assembly.">'
+                ),
+                {},
+            )
+
+    def test_public_claim_guard_normalizes_latex_math_fonts(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        for source in (
+            r"\(\mathrm{Spin}(8)\) causes HPV16 capsid assembly.",
+            r"\operatorname{Spin}(8) causes HPV16 capsid assembly.",
+            r"\mathit{E}_{8} causes HPV16 capsid assembly.",
+        ):
+            with self.subTest(source=source):
+                with self.assertRaises(SystemExit):
+                    validate_public_claim_text("sample.tex", source, {})
+
+    def test_public_claim_guard_evaluates_ifdefined(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                (
+                    r"\ifdefined\notdefined "
+                    r"COSMO-D-011 symbolic \fi "
+                    r"Spin(8) triality causes HPV16 capsid assembly."
+                ),
+                claim_classes,
+            )
+
+    def test_d003_rejects_equality_dispatch_table_access(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b3.py"
+        ).read_text(encoding="utf-8")
+        marker = (
+            "    def test_root_system_report_has_rank_eight_and_norm_two(self) -> None:\n"
+        )
+        self.assertEqual(regression_text.count(marker), 1)
+        source = regression_text.replace(
+            marker,
+            (
+                marker
+                + '        equality_funcs = self.__dict__["_type_equality_funcs"]\n'
+                + "        equality_funcs[int] = lambda *_args: None\n"
+                + "        equality_funcs[str] = lambda *_args: None\n"
+            ),
+            1,
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "shadow protected unittest behavior",
+        ):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_phase_b3.py",
+                "test_root_system_report_has_rank_eight_and_norm_two",
+                source,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
