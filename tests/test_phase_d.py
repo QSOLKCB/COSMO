@@ -4415,5 +4415,187 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             )
 
 
+    def test_regression_cannot_import_runner_nonce_from_main(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_target = cast(
+            Callable[
+                [str, str, str, Path, str, str | None, str | None],
+                None,
+            ],
+            namespace["validate_computational_regression_target"],
+        )
+        source = (
+            "import __main__\n"
+            "import unittest\n"
+            "class ForgedEvidence(unittest.TestCase):\n"
+            "    def test_evidence(self) -> None:\n"
+            "        self.fail('must execute')\n"
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "forbidden runtime primitive",
+        ):
+            validate_target(
+                "COSMO-D-999",
+                "tests/test_forged_evidence.py",
+                "test_evidence",
+                REPOSITORY_ROOT / "tests" / "test_forged_evidence.py",
+                source,
+                None,
+                None,
+            )
+
+    def test_d003_rejects_per_instance_assert_equal_shadowing(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b3.py"
+        ).read_text(encoding="utf-8")
+        marker = (
+            "    def test_root_system_report_has_rank_eight_and_norm_two(self) -> None:\n"
+        )
+        self.assertEqual(regression_text.count(marker), 1)
+        source = regression_text.replace(
+            marker,
+            marker
+            + '        setattr(self, "assertEqual", lambda *_args: None)\n',
+            1,
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "shadow protected unittest behavior",
+        ):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_phase_b3.py",
+                "test_root_system_report_has_rank_eight_and_norm_two",
+                source,
+            )
+
+    def test_public_claim_guard_expands_default_latex_macro_argument(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                (
+                    r"\newcommand{\bridge}[1][triality]"
+                    r"{Spin(8) #1 causes HPV16 capsid assembly.}"
+                    r"\bridge"
+                ),
+                {},
+            )
+
+    def test_public_claim_guard_resolves_possessive_antecedent(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    "Spin(8) triality and HPV16 capsid assembly are under discussion. "
+                    "Their interaction causes capsid formation."
+                ),
+                {},
+            )
+
+    def test_latex_transclusions_ignore_commented_input(self) -> None:
+        namespace = self.load_validator_namespace()
+        expand_transclusions = cast(
+            Callable[[str, str, Path, set[str] | None], str],
+            namespace["expand_latex_transclusions"],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = "ordinary prose\n% \\input{not-present}\n"
+            expanded = expand_transclusions(
+                "sample.tex",
+                source,
+                root,
+                None,
+            )
+            self.assertNotIn("\\input", expanded)
+            self.assertIn("ordinary prose", expanded)
+
+    def test_d003_reviewed_result_cannot_be_rebound_before_assertions(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b3.py"
+        ).read_text(encoding="utf-8")
+        reviewed = "        report = validate_e8_root_system(roots)\n"
+        self.assertEqual(regression_text.count(reviewed), 1)
+        source = regression_text.replace(
+            reviewed,
+            reviewed + "        report = report.__class__(240, 112, 128, 8, E8_ROOT_TABLE_SHA256)\n",
+            1,
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "missing assertEqual pairs",
+        ):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_phase_b3.py",
+                "test_root_system_report_has_rank_eight_and_norm_two",
+                source,
+            )
+
+    def test_markdown_balanced_link_destination_is_not_visible_claim_text(
+        self,
+    ) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        validate_public_claim_text(
+            "sample.md",
+            "[background](https://example.org/Spin(8)-triality-causes-HPV16-capsid)",
+            {},
+        )
+
+    def test_public_false_that_negates_embedded_assertion(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        validate_public_claim_text(
+            "sample.md",
+            "It is false that Spin(8) triality causes HPV16 capsid assembly.",
+            {},
+        )
+
+    def test_public_html_br_preserves_visible_separator(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.html",
+                "<p>Spin(8) triality causes<br>HPV16 capsid assembly.</p>",
+                {},
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

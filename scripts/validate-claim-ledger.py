@@ -1641,8 +1641,12 @@ def _forbidden_regression_runtime_primitive(
     for statement in tree.body:
         if isinstance(statement, ast.Import):
             for alias in statement.names:
+                if alias.name == "__main__":
+                    return "import __main__"
                 aliases[alias.asname or alias.name.split(".", 1)[0]] = alias.name
         elif isinstance(statement, ast.ImportFrom) and statement.module is not None:
+            if statement.module == "__main__":
+                return "from __main__ import ..."
             for alias in statement.names:
                 aliases[alias.asname or alias.name] = (
                     statement.module + "." + alias.name
@@ -1665,6 +1669,23 @@ def _forbidden_regression_runtime_primitive(
             return node.attr
         if not isinstance(node, ast.Call):
             continue
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "__import__"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "__main__"
+        ):
+            return "__import__('__main__')"
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "import_module"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "__main__"
+        ):
+            return "import_module('__main__')"
+
         call_path = resolved_path(node.func)
         if call_path is not None:
             if call_path in FORBIDDEN_REGRESSION_RUNTIME_CALLS:
@@ -1683,6 +1704,93 @@ def _forbidden_regression_runtime_primitive(
         ):
             return f"getattr(..., {node.args[1].value!r})"
     return None
+
+
+class _UnittestInstanceMutationFinder(ast.NodeVisitor):
+    """Detect per-instance shadowing of protected unittest methods."""
+
+    def __init__(self) -> None:
+        self.found = False
+
+    def _is_self(self, node: ast.expr) -> bool:
+        return isinstance(node, ast.Name) and node.id == "self"
+
+    def _target_is_protected(self, target: ast.expr) -> bool:
+        if (
+            isinstance(target, ast.Attribute)
+            and self._is_self(target.value)
+            and target.attr in UNITTEST_PROTECTED_HOOKS
+        ):
+            return True
+        if (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Attribute)
+            and self._is_self(target.value.value)
+            and target.value.attr == "__dict__"
+            and isinstance(target.slice, ast.Constant)
+            and target.slice.value in UNITTEST_PROTECTED_HOOKS
+        ):
+            return True
+        return False
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if any(self._target_is_protected(target) for target in node.targets):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if self._target_is_protected(node.target):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        if self._target_is_protected(node.target):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id in {"setattr", "delattr"}
+            and len(node.args) >= 2
+            and self._is_self(node.args[0])
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in UNITTEST_PROTECTED_HOOKS
+        ):
+            self.found = True
+            return
+        if (
+            isinstance(node.func, ast.Attribute)
+            and self._is_self(node.func.value)
+            and node.func.attr in {"__setattr__", "__delattr__"}
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value in UNITTEST_PROTECTED_HOOKS
+        ):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+
+def _method_mutates_unittest_instance(method: ast.FunctionDef) -> bool:
+    finder = _UnittestInstanceMutationFinder()
+    for statement in method.body:
+        finder.visit(statement)
+        if finder.found:
+            return True
+    return False
 
 
 def locate_unittest_regression(
@@ -1781,6 +1889,11 @@ def locate_unittest_regression(
                     fail(
                         f"{claim_id} regression anchor {anchor!r} may not be "
                         "a generator; its body must execute synchronously"
+                    )
+                if _method_mutates_unittest_instance(member):
+                    fail(
+                        f"{claim_id} regression anchor {anchor!r} may not "
+                        "shadow protected unittest behavior on self"
                     )
                 matches.append((node.name, member))
     if len(matches) != 1:
@@ -2883,7 +2996,18 @@ class _BindingMutationFinder(ast.NodeVisitor):
                 self._target_mentions_binding(element)
                 for element in target.elts
             )
+        if (
+            isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Name)
+            and target.value.id in self.aliases
+        ):
+            return True
         if isinstance(target, ast.Subscript):
+            if (
+                isinstance(target.value, ast.Name)
+                and target.value.id in self.aliases
+            ):
+                return True
             if (
                 isinstance(target.value, ast.Call)
                 and isinstance(target.value.func, ast.Name)
@@ -3401,14 +3525,26 @@ def _top_level_call_assignment_index(
     return None
 
 
+def _statement_mutates_reviewed_binding(
+    statement: ast.stmt,
+    binding: str,
+) -> bool:
+    finder = _BindingMutationFinder(binding)
+    finder.visit(statement)
+    return finder.found
+
+
 def _reviewed_top_level_assert_equal_pairs(
     statements: list[ast.stmt],
     module_constants: dict[str, bool],
+    binding: str,
 ) -> set[frozenset[str]]:
-    """Collect direct reviewed assertions until an obvious selected exit."""
+    """Collect reviewed assertions only while the call result remains bound."""
     observed: set[frozenset[str]] = set()
     for statement in statements:
         if _static_selected_exit_kind([statement], module_constants) is not None:
+            break
+        if _statement_mutates_reviewed_binding(statement, binding):
             break
         pair = _assert_equal_pair(statement)
         if pair is not None:
@@ -3419,10 +3555,13 @@ def _reviewed_top_level_assert_equal_pairs(
 def _reviewed_top_level_has_d003_norm_assertion(
     statements: list[ast.stmt],
     module_constants: dict[str, bool],
+    binding: str,
 ) -> bool:
-    """Require the reviewed norm assertion directly after the reviewed call."""
+    """Require the reviewed norm assertion before result rebinding or exit."""
     for statement in statements:
         if _static_selected_exit_kind([statement], module_constants) is not None:
+            return False
+        if _statement_mutates_reviewed_binding(statement, binding):
             return False
         if _is_d003_norm_assertion(statement):
             return True
@@ -3737,6 +3876,7 @@ def validate_reviewed_computational_regression_semantics(
         observed_pairs = _reviewed_top_level_assert_equal_pairs(
             reviewed_tail,
             module_constants,
+            "report",
         )
         missing = required_pairs - observed_pairs
         if missing:
@@ -3748,6 +3888,7 @@ def validate_reviewed_computational_regression_semantics(
         if not _reviewed_top_level_has_d003_norm_assertion(
             reviewed_tail,
             module_constants,
+            "report",
         ):
             fail(
                 f"{claim_id} regression must verify every canonical root "
@@ -3782,6 +3923,7 @@ def validate_reviewed_computational_regression_semantics(
     observed_pairs = _reviewed_top_level_assert_equal_pairs(
         reviewed_tail,
         module_constants,
+        "recovered",
     )
 
     missing = required_pairs - observed_pairs
@@ -4031,28 +4173,19 @@ implementation_module = payload.get("implementation_module")
 implementation_filename = payload.get("implementation_filename")
 class_name, anchor, filename, run_name = sys.argv[1:5]
 
-protected_testcase_type = unittest.TestCase
-protected_testcase_run = unittest.TestCase.run
-protected_testresult_type = unittest.TestResult
-protected_unittest_signature = (
-    unittest.TestCase,
-    unittest.TestCase.run,
-    unittest.TestCase._callTestMethod,
-    unittest.TestCase.assertEqual,
-    unittest.TestCase.assertTrue,
-    unittest.TestResult,
-    unittest.TestResult.startTest,
-    unittest.TestResult.stopTest,
-    unittest.TestResult.addSuccess,
-    unittest.TestResult.addFailure,
-    unittest.TestResult.addError,
-    unittest.TestResult.addSkip,
-    unittest.TestResult.addExpectedFailure,
-    unittest.TestResult.addUnexpectedSuccess,
-)
-
-def _unittest_runtime_is_pristine():
-    return protected_unittest_signature == (
+def _run_regression():
+    protected_testcase_type = unittest.TestCase
+    protected_testcase_run = unittest.TestCase.run
+    protected_testresult_type = unittest.TestResult
+    protected_instance_names = (
+        "run",
+        "_callTestMethod",
+        "assertEqual",
+        "assertTrue",
+        "__getattribute__",
+        "__getattr__",
+    )
+    protected_unittest_signature = (
         unittest.TestCase,
         unittest.TestCase.run,
         unittest.TestCase._callTestMethod,
@@ -4069,76 +4202,107 @@ def _unittest_runtime_is_pristine():
         unittest.TestResult.addUnexpectedSuccess,
     )
 
-completion_nonce = secrets.token_hex(32)
-print(f"COSMO-RUN-BEGIN:{completion_nonce}", flush=True)
+    def unittest_runtime_is_pristine():
+        return protected_unittest_signature == (
+            unittest.TestCase,
+            unittest.TestCase.run,
+            unittest.TestCase._callTestMethod,
+            unittest.TestCase.assertEqual,
+            unittest.TestCase.assertTrue,
+            unittest.TestResult,
+            unittest.TestResult.startTest,
+            unittest.TestResult.stopTest,
+            unittest.TestResult.addSuccess,
+            unittest.TestResult.addFailure,
+            unittest.TestResult.addError,
+            unittest.TestResult.addSkip,
+            unittest.TestResult.addExpectedFailure,
+            unittest.TestResult.addUnexpectedSuccess,
+        )
 
-if implementation_source is not None and implementation_module is not None:
-    package_name, _, child_name = implementation_module.rpartition(".")
-    package = importlib.import_module(package_name)
-    frozen_module = types.ModuleType(implementation_module)
-    frozen_module.__file__ = implementation_filename
-    frozen_module.__package__ = package_name
-    sys.modules[implementation_module] = frozen_module
-    code = compile(
-        implementation_source,
-        implementation_filename or implementation_module,
-        "exec",
-    )
-    exec(code, frozen_module.__dict__)
-    setattr(package, child_name, frozen_module)
-    for name, value in frozen_module.__dict__.items():
-        if not name.startswith("_") and hasattr(package, name):
-            setattr(package, name, value)
+    completion_nonce = secrets.token_hex(32)
+    print(f"COSMO-RUN-BEGIN:{completion_nonce}", flush=True)
 
-if not _unittest_runtime_is_pristine():
-    print("implementation mutated protected unittest behavior", file=sys.stderr)
-    raise SystemExit(26)
+    if implementation_source is not None and implementation_module is not None:
+        package_name, _, child_name = implementation_module.rpartition(".")
+        package = importlib.import_module(package_name)
+        frozen_module = types.ModuleType(implementation_module)
+        frozen_module.__file__ = implementation_filename
+        frozen_module.__package__ = package_name
+        sys.modules[implementation_module] = frozen_module
+        code = compile(
+            implementation_source,
+            implementation_filename or implementation_module,
+            "exec",
+        )
+        exec(code, frozen_module.__dict__)
+        setattr(package, child_name, frozen_module)
+        for name, value in frozen_module.__dict__.items():
+            if not name.startswith("_") and hasattr(package, name):
+                setattr(package, name, value)
 
-namespace = {
-    "__name__": run_name,
-    "__file__": filename,
-    "__package__": None,
-    "__cached__": None,
-}
-try:
-    code = compile(source, filename, "exec")
-    exec(code, namespace)
-except BaseException as exc:
-    print(f"load failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-    raise SystemExit(20)
+    if not unittest_runtime_is_pristine():
+        print("implementation mutated protected unittest behavior", file=sys.stderr)
+        return 26
 
-if not _unittest_runtime_is_pristine():
-    print("regression module mutated protected unittest behavior", file=sys.stderr)
-    raise SystemExit(27)
+    namespace = {
+        "__name__": run_name,
+        "__file__": filename,
+        "__package__": None,
+        "__cached__": None,
+    }
+    try:
+        code = compile(source, filename, "exec")
+        exec(code, namespace)
+    except BaseException as exc:
+        print(f"load failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 20
 
-case_type = namespace.get(class_name)
-if not isinstance(case_type, type) or not issubclass(case_type, protected_testcase_type):
-    print("claimed class is not unittest.TestCase", file=sys.stderr)
-    raise SystemExit(21)
+    if not unittest_runtime_is_pristine():
+        print("regression module mutated protected unittest behavior", file=sys.stderr)
+        return 27
 
-case = case_type(anchor)
-result = protected_testresult_type()
-protected_testcase_run(case, result)
+    case_type = namespace.get(class_name)
+    if not isinstance(case_type, type) or not issubclass(case_type, protected_testcase_type):
+        print("claimed class is not unittest.TestCase", file=sys.stderr)
+        return 21
 
-if result.testsRun != 1:
-    print(f"testsRun={result.testsRun}", file=sys.stderr)
-    raise SystemExit(22)
-if result.skipped:
-    print("regression skipped", file=sys.stderr)
-    raise SystemExit(23)
-if result.expectedFailures:
-    print("regression expected failure", file=sys.stderr)
-    raise SystemExit(24)
-if result.failures or result.errors or result.unexpectedSuccesses:
-    details = result.failures + result.errors
-    rendered = details[0][1].splitlines()[-1] if details else "unexpected success"
-    print(rendered, file=sys.stderr)
-    raise SystemExit(25)
-if not _unittest_runtime_is_pristine():
-    print("test execution mutated protected unittest behavior", file=sys.stderr)
-    raise SystemExit(28)
+    case = case_type(anchor)
+    if any(name in case.__dict__ for name in protected_instance_names):
+        print("claimed test instance shadows protected unittest behavior", file=sys.stderr)
+        return 29
 
-print(f"COSMO-RUN-END:{completion_nonce}", flush=True)
+    result = protected_testresult_type()
+    protected_testcase_run(case, result)
+
+    if any(name in case.__dict__ for name in protected_instance_names):
+        print("test execution shadows protected unittest behavior", file=sys.stderr)
+        return 30
+    if result.testsRun != 1:
+        print(f"testsRun={result.testsRun}", file=sys.stderr)
+        return 22
+    if result.skipped:
+        print("regression skipped", file=sys.stderr)
+        return 23
+    if result.expectedFailures:
+        print("regression expected failure", file=sys.stderr)
+        return 24
+    if result.failures or result.errors or result.unexpectedSuccesses:
+        details = result.failures + result.errors
+        rendered = details[0][1].splitlines()[-1] if details else "unexpected success"
+        print(rendered, file=sys.stderr)
+        return 25
+    if not unittest_runtime_is_pristine():
+        print("test execution mutated protected unittest behavior", file=sys.stderr)
+        return 28
+
+    print(f"COSMO-RUN-END:{completion_nonce}", flush=True)
+    return 0
+
+raise SystemExit(_run_regression())
+'''
+    try:
+        completed = subprocess.run(
 '''
     try:
         completed = subprocess.run(
@@ -4718,7 +4882,8 @@ def public_assertion_antecedent(
 ) -> str:
     """Return the immediately preceding sentence for a simple pronoun subject."""
     if re.search(
-        r"\b(?:it|this|they|them|these|those)\b",
+        r"\b(?:it|this|they|them|these|those|their|theirs|its|"
+        r"our|ours|your|yours|his|her|hers)\b",
         clause,
         re.IGNORECASE,
     ) is None:
@@ -4773,6 +4938,19 @@ def public_assertion_is_negated(
         predicate_prefix,
         re.IGNORECASE,
     ) is not None:
+        return True
+    if (
+        re.search(
+            r"\bnot\s+false\s+that\b",
+            predicate_prefix,
+            re.IGNORECASE,
+        ) is None
+        and re.search(
+            r"\b(?:(?:it|this|that)\s+is\s+)?false\s+that\b",
+            predicate_prefix,
+            re.IGNORECASE,
+        ) is not None
+    ):
         return True
     predicate_prefix = re.sub(
         r"\bno\s+doubt(?:\s+that)?\b",
@@ -4849,17 +5027,44 @@ def strip_markdown_indented_code_blocks(text: str) -> str:
 
 
 def strip_markdown_link_destinations(text: str) -> str:
-    """Preserve visible labels while removing non-rendered link destinations."""
+    """Preserve visible labels while removing balanced inline destinations."""
     text = re.sub(
         r"(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*\S+.*$",
         lambda match: _blank_non_newlines(match.group(0)),
         text,
     )
-    return re.sub(
-        r"(!?)\[([^\]]*)\]\((?:\\.|[^()])*\)",
-        lambda match: match.group(2),
-        text,
-    )
+
+    opener = re.compile(r"(!?)\[([^\]\n]*)\]\(")
+    parts: list[str] = []
+    cursor = 0
+    search_from = 0
+    while True:
+        match = opener.search(text, search_from)
+        if match is None:
+            break
+        depth = 1
+        position = match.end()
+        while position < len(text) and depth:
+            character = text[position]
+            if character == "\\":
+                position += 2
+                continue
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+            position += 1
+        if depth != 0:
+            search_from = match.end()
+            continue
+        parts.append(text[cursor:match.start()])
+        parts.append(match.group(2))
+        cursor = position
+        search_from = position
+    if not parts:
+        return text
+    parts.append(text[cursor:])
+    return "".join(parts)
 
 
 class _VisibleHTMLTextParser(HTMLParser):
@@ -5029,9 +5234,11 @@ class _VisibleHTMLTextParser(HTMLParser):
                 not hidden_here
                 and self.raw_text_depth == 0
                 and self.hidden_depth == 0
-                and normalized in self.BLOCK_TAGS
             ):
-                self._append_block_boundary()
+                if normalized == "br":
+                    self.parts.append(" ")
+                elif normalized in self.BLOCK_TAGS:
+                    self._append_block_boundary()
             return
 
         self.open_tags.append((normalized, hidden_here))
@@ -5229,12 +5436,12 @@ def strip_latex_disabled_branches(text: str) -> str:
 
 def latex_user_macro_definitions(
     text: str,
-) -> dict[str, tuple[int, str]]:
+) -> dict[str, tuple[int, str, str | None]]:
     """Extract simple zero-to-nine-argument user macros and rendered bodies."""
     command_re = re.compile(
         r"\\(?:newcommand|renewcommand|providecommand)\*?"
     )
-    macros: dict[str, tuple[int, str]] = {}
+    macros: dict[str, tuple[int, str, str | None]] = {}
     cursor = 0
 
     def skip_space(index: int) -> int:
@@ -5292,6 +5499,7 @@ def latex_user_macro_definitions(
             continue
 
         argument_count = 0
+        default_argument: str | None = None
         if index < len(text) and text[index] == "[":
             bracket_end = text.find("]", index + 1)
             if bracket_end == -1:
@@ -5307,8 +5515,15 @@ def latex_user_macro_definitions(
                 continue
             index = skip_space(bracket_end + 1)
             if index < len(text) and text[index] == "[":
-                cursor = match.end()
-                continue
+                if argument_count == 0:
+                    cursor = match.end()
+                    continue
+                default_end = text.find("]", index + 1)
+                if default_end == -1:
+                    cursor = match.end()
+                    continue
+                default_argument = text[index + 1:default_end]
+                index = skip_space(default_end + 1)
 
         body_end = braced_end(index)
         if body_end is None:
@@ -5318,6 +5533,7 @@ def latex_user_macro_definitions(
             macros[macro_name] = (
                 argument_count,
                 text[index + 1:body_end - 1],
+                default_argument,
             )
         cursor = body_end
 
@@ -5351,15 +5567,42 @@ def _latex_braced_argument(
     return None
 
 
+def _latex_bracketed_argument(
+    text: str,
+    index: int,
+) -> tuple[str, int] | None:
+    """Parse one bracketed LaTeX optional argument."""
+    while index < len(text) and text[index].isspace():
+        index += 1
+    if index >= len(text) or text[index] != "[":
+        return None
+    depth = 1
+    start = index + 1
+    position = start
+    while position < len(text):
+        character = text[position]
+        if character == "\\":
+            position += 2
+            continue
+        if character == "[":
+            depth += 1
+        elif character == "]":
+            depth -= 1
+            if depth == 0:
+                return text[start:position], position + 1
+        position += 1
+    return None
+
+
 def expand_latex_user_macros(
     text: str,
-    macros: dict[str, tuple[int, str]],
+    macros: dict[str, tuple[int, str, str | None]],
 ) -> str:
     """Expand visible zero-to-nine-argument user macro invocations."""
     rendered = text
     for _ in range(max(1, len(macros) + 1)):
         changed = False
-        for macro, (argument_count, body) in macros.items():
+        for macro, (argument_count, body, default_argument) in macros.items():
             if argument_count == 0:
                 def replace_zero_argument_macro(
                     _match: re.Match[str],
@@ -5387,7 +5630,22 @@ def expand_latex_user_macros(
                     argument_cursor = match.end()
                     arguments: list[str] = []
                     valid = True
-                    for _argument_index in range(argument_count):
+                    required_start = 0
+                    if default_argument is not None:
+                        optional = _latex_bracketed_argument(
+                            rendered,
+                            argument_cursor,
+                        )
+                        if optional is None:
+                            arguments.append(default_argument)
+                        else:
+                            argument, argument_cursor = optional
+                            arguments.append(argument)
+                        required_start = 1
+                    for _argument_index in range(
+                        required_start,
+                        argument_count,
+                    ):
                         parsed = _latex_braced_argument(
                             rendered,
                             argument_cursor,
@@ -5802,6 +6060,7 @@ def expand_latex_transclusions(
         fail(f"LaTeX transclusion cycle detected at {path_text!r}")
     seen = {*seen, path_text}
     parent = Path(path_text).parent
+    text = strip_latex_comments(text)
 
     pattern = re.compile(r"\\(?:input|include)\s*\{([^{}\n]+)\}")
 
