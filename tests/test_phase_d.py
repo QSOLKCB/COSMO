@@ -956,6 +956,42 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 source,
             )
 
+    def test_regression_rejects_helper_called_dispatch_mutation(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        source = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "def fake_run(\n"
+            "    self: unittest.TestCase,\n"
+            "    result: unittest.TestResult | None = None,\n"
+            ") -> unittest.TestResult:\n"
+            "    if result is None:\n"
+            "        result = unittest.TestResult()\n"
+            "    result.startTest(self)\n"
+            "    result.addSuccess(self)\n"
+            "    result.stopTest(self)\n"
+            "    return result\n"
+            "class ExactE8RootTests(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        validate_e8_root_system(())\n"
+            "def disable_claimed_test() -> None:\n"
+            "    setattr(ExactE8RootTests, 'run', fake_run)\n"
+            "disable_claimed_test()\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                source,
+            )
+
     def test_regression_rejects_inherited_dispatch_override(self) -> None:
         namespace = self.load_validator_namespace()
         validate_connection = cast(
@@ -1835,6 +1871,45 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 weakened,
             )
 
+    def test_d014_required_assertions_must_be_reachable(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b5.py"
+        ).read_text(encoding="utf-8")
+        expected_assertions = (
+            "        self.assertEqual(recovered.cube, cube)\n"
+            "        self.assertEqual(\n"
+            "            recovered.storage.corrected_codewords,\n"
+            "            codeword_count,\n"
+            "        )\n"
+        )
+        unreachable = regression_text.replace(
+            expected_assertions,
+            (
+                "        if False:\n"
+                "            self.assertEqual(recovered.cube, cube)\n"
+                "            self.assertEqual(\n"
+                "                recovered.storage.corrected_codewords,\n"
+                "                codeword_count,\n"
+                "            )\n"
+            ),
+            1,
+        )
+        self.assertNotEqual(unreachable, regression_text)
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-014",
+                "cosmo_core/storage.py",
+                "def recover_cube_storage",
+                "tests/test_phase_b5.py",
+                "test_full_cube_recovers_one_bit_error_in_every_codeword",
+                unreachable,
+            )
+
     def test_implementation_provenance_requires_executable_project_source(self) -> None:
         namespace = self.load_validator_namespace()
         validate_implementation = cast(
@@ -2545,6 +2620,28 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 claim_classes,
             )
 
+    def test_public_html_table_cells_do_not_share_claim_scope(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        claim_classes = {
+            claim["id"]: claim["class"]
+            for claim in self.load_ledger()["claims"]
+        }
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.md",
+                (
+                    "<table><tr>"
+                    "<td>COSMO-D-011 symbolic association</td>"
+                    "<td>Spin(8) triality causes HPV16 capsid assembly.</td>"
+                    "</tr></table>"
+                ),
+                claim_classes,
+            )
+
     def test_public_claim_guard_handles_quoted_greater_than_in_html(self) -> None:
         namespace = self.load_validator_namespace()
         validate_public_claim_text = cast(
@@ -2837,6 +2934,23 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                     r"Spin(8) triality causes HPV16 capsid assembly."
                 ),
                 {"COSMO-D-011": "SYMBOLIC"},
+            )
+
+    def test_public_claim_guard_expands_invoked_user_latex_macro(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                (
+                    r"\newcommand{\bridge}"
+                    r"{Spin(8) triality causes HPV16 capsid assembly.}"
+                    r"\bridge"
+                ),
+                {},
             )
 
     def test_public_claim_guard_normalizes_latex_href_label(self) -> None:
