@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -4270,6 +4271,148 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             with self.subTest(source=source):
                 with self.assertRaises(SystemExit):
                     validate_public_claim_text("sample.html", source, {})
+
+
+    def test_implementation_cannot_mutate_unittest_dispatch(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_implementation = cast(
+            Callable[[str, str, str, str], None],
+            namespace["validate_computational_implementation_target"],
+        )
+        source = (
+            "import unittest\n"
+            "def validate_e8_root_system(value: object = None) -> object:\n"
+            "    return value\n"
+            "def fake_run(self: unittest.TestCase, result: object = None) -> object:\n"
+            "    return result\n"
+            'setattr(unittest.TestCase, "run", fake_run)\n'
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "mutates protected unittest behavior",
+        ):
+            validate_implementation(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                source,
+            )
+
+    def test_public_html_parser_honors_implied_table_end_tags(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        samples = (
+            "<table><tr><td hidden>draft<td>Spin(8) triality causes HPV16 capsid assembly.</table>",
+            "<table><tr><th hidden>draft<th>Spin(8) triality causes HPV16 capsid assembly.</table>",
+            "<table><tr hidden><td>draft<tr><td>Spin(8) triality causes HPV16 capsid assembly.</table>",
+        )
+        for source in samples:
+            with self.subTest(source=source):
+                with self.assertRaises(SystemExit):
+                    validate_public_claim_text("sample.html", source, {})
+
+    def test_public_claim_guard_expands_nested_brace_macro_arguments(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        with self.assertRaises(SystemExit):
+            validate_public_claim_text(
+                "sample.tex",
+                (
+                    r"\newcommand{\bridge}[1]"
+                    r"{Spin(8) triality causes HPV16 #1.}"
+                    r"\bridge{\textbf{capsid assembly}}"
+                ),
+                {},
+            )
+
+    def test_public_negation_is_scoped_to_assertion_predicate(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_public_claim_text = cast(
+            Callable[[str, str, dict[str, str]], None],
+            namespace["validate_public_claim_text"],
+        )
+        for source in (
+            "It is not surprising that Spin(8) triality causes HPV16 capsid assembly.",
+            "We cannot ignore that Spin(8) triality causes HPV16 capsid assembly.",
+        ):
+            with self.subTest(source=source):
+                with self.assertRaises(SystemExit):
+                    validate_public_claim_text("sample.md", source, {})
+
+    def test_isolated_regression_timeout_fails_closed(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_target = cast(
+            Callable[
+                [str, str, str, Path, str, str | None, str | None],
+                None,
+            ],
+            namespace["validate_computational_regression_target"],
+        )
+        source = (
+            "import unittest\n"
+            "class TimeoutEvidence(unittest.TestCase):\n"
+            "    def test_evidence(self) -> None:\n"
+            "        pass\n"
+        )
+        timeout = subprocess.TimeoutExpired(
+            cmd=[sys.executable],
+            timeout=30,
+        )
+        with patch.object(
+            namespace["subprocess"],
+            "run",
+            side_effect=timeout,
+        ):
+            with self.assertRaisesRegex(SystemExit, "timed out"):
+                validate_target(
+                    "COSMO-D-999",
+                    "tests/test_timeout_evidence.py",
+                    "test_evidence",
+                    REPOSITORY_ROOT / "tests" / "test_timeout_evidence.py",
+                    source,
+                    None,
+                    None,
+                )
+
+    def test_formal_provenance_binds_reviewed_authority_definitions(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_formal = cast(
+            Callable[[str, str, str, str], None],
+            namespace["validate_formal_provenance_target"],
+        )
+        source = (
+            "namespace Cosmovirus\n\n"
+            "inductive CosmoLayer where\n"
+            "  | OnlyLayer\n"
+            "  deriving Repr, DecidableEq\n\n"
+            "def cosmoStep : CosmoLayer → CosmoLayer\n"
+            "  | layer => layer\n\n"
+            "def psiIterate : Nat → CosmoLayer → CosmoLayer\n"
+            "  | _, layer => layer\n\n"
+            "theorem six_step_periodic (layer : CosmoLayer) : "
+            "psiIterate 6 layer = layer := by\n"
+            "  rfl\n\n"
+            "end Cosmovirus\n"
+        )
+        with self.assertRaisesRegex(
+            SystemExit,
+            "changes reviewed authoritative Lean declaration",
+        ):
+            validate_formal(
+                "COSMO-D-001",
+                "cosmovirus.lean",
+                (
+                    "theorem six_step_periodic (layer : CosmoLayer) : "
+                    "psiIterate 6 layer = layer := by"
+                ),
+                source,
+            )
 
 
 if __name__ == "__main__":

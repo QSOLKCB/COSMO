@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LEDGER_PATH = ROOT / "claims" / "claim-ledger.json"
 INDEX_PATH = ROOT / "CLAIM-LEDGER.md"
 PROTECTED_LEAN_COMPILE_SCRIPT = ROOT / "scripts" / "run-lean-verified-reuse-ci.sh"
+REGRESSION_EXECUTION_TIMEOUT_SECONDS = 30
 
 CLASSES = ("FORMAL", "COMPUTATIONAL", "SCIENTIFIC", "HYPOTHESIS", "SYMBOLIC")
 CLAIM_ID = re.compile(r"COSMO-D-[0-9]{3}$")
@@ -372,8 +373,39 @@ PINNED_REVIEWED_CLAIM_RECORDS: dict[str, dict[str, Any]] = cast(
 )
 PINNED_REVIEWED_CLAIM_IDS = tuple(PINNED_REVIEWED_CLAIM_RECORDS)
 PINNED_FORMAL_AUTHORITY_IDENTIFIERS: dict[str, frozenset[str]] = {
-    "COSMO-D-001": frozenset({"CosmoLayer", "psiIterate"}),
-    "COSMO-D-002": frozenset({"CosmoLayer", "ReachesWithinCycle"}),
+    "COSMO-D-001": frozenset({"CosmoLayer", "cosmoStep", "psiIterate"}),
+    "COSMO-D-002": frozenset(
+        {"CosmoLayer", "cosmoStep", "psiIterate", "ReachesWithinCycle"}
+    ),
+}
+PINNED_FORMAL_AUTHORITY_DECLARATIONS: dict[str, str] = {
+    "CosmoLayer": (
+        "inductive CosmoLayer where | E8Symmetry | PhiScaled | SiS2Substrate "
+        "| TrialityBranch | HPV16Layer | OuroborosLoop deriving Repr, DecidableEq"
+    ),
+    "cosmoStep": (
+        "def cosmoStep : CosmoLayer → CosmoLayer "
+        "| E8Symmetry => PhiScaled "
+        "| PhiScaled => SiS2Substrate "
+        "| SiS2Substrate => TrialityBranch "
+        "| TrialityBranch => HPV16Layer "
+        "| HPV16Layer => OuroborosLoop "
+        "| OuroborosLoop => E8Symmetry"
+    ),
+    "psiIterate": (
+        "def psiIterate : Nat → CosmoLayer → CosmoLayer "
+        "| 0, l => l "
+        "| n + 1, l => psiIterate n (cosmoStep l)"
+    ),
+    "ReachesWithinCycle": (
+        "def ReachesWithinCycle (source target : CosmoLayer) : Prop := "
+        "psiIterate 0 source = target ∨ "
+        "psiIterate 1 source = target ∨ "
+        "psiIterate 2 source = target ∨ "
+        "psiIterate 3 source = target ∨ "
+        "psiIterate 4 source = target ∨ "
+        "psiIterate 5 source = target"
+    ),
 }
 
 PINNED_FORMAL_PROVENANCE: dict[str, tuple[str, str]] = {
@@ -1254,6 +1286,36 @@ def lean_namespace_variable_names(text: str) -> set[str]:
     return names
 
 
+def lean_direct_declaration_blocks(
+    text: str,
+) -> dict[str, list[str]]:
+    """Return normalized direct namespace declaration blocks by declared name."""
+    declaration_re = re.compile(
+        r"^\s*(?:inductive|structure|def|abbrev|opaque)\s+"
+        r"([A-Za-z_][A-Za-z0-9_']*)\b"
+    )
+    lines = text.splitlines()
+    result: dict[str, list[str]] = {}
+    index = 0
+    while index < len(lines):
+        match = declaration_re.match(lines[index])
+        if match is None:
+            index += 1
+            continue
+        name = match.group(1)
+        block = [lines[index]]
+        index += 1
+        while index < len(lines) and lines[index].strip():
+            if declaration_re.match(lines[index]) is not None:
+                break
+            block.append(lines[index])
+            index += 1
+        result.setdefault(name, []).append(
+            normalize_lean_declaration("\n".join(block))
+        )
+    return result
+
+
 def lean_namespace_included_names(text: str) -> set[str]:
     """Return names explicitly included as direct namespace theorem parameters."""
     names: set[str] = set()
@@ -1314,6 +1376,26 @@ def validate_formal_provenance_target(
             f"{claim_id} FORMAL provenance shadows reviewed authoritative "
             f"Lean identifiers {sorted(shadowed)}"
         )
+
+    authority_blocks = lean_direct_declaration_blocks(scoped_text)
+    for authority_name in PINNED_FORMAL_AUTHORITY_IDENTIFIERS.get(
+        claim_id,
+        frozenset(),
+    ):
+        expected_declaration = PINNED_FORMAL_AUTHORITY_DECLARATIONS.get(
+            authority_name
+        )
+        observed_declarations = authority_blocks.get(authority_name, [])
+        if (
+            expected_declaration is None
+            or observed_declarations != [
+                normalize_lean_declaration(expected_declaration)
+            ]
+        ):
+            fail(
+                f"{claim_id} FORMAL provenance changes reviewed authoritative "
+                f"Lean declaration {authority_name!r}"
+            )
 
     normalized_source = normalize_lean_declaration(scoped_text)
     normalized_anchor = normalize_lean_declaration(anchor)
@@ -1389,7 +1471,7 @@ class _UnittestDispatchMutationFinder(ast.NodeVisitor):
     def _target_is_dispatch_hook(self, target: ast.expr) -> bool:
         return (
             isinstance(target, ast.Attribute)
-            and target.attr in UNITTEST_DISPATCH_HOOKS
+            and target.attr in UNITTEST_PROTECTED_HOOKS
             and self._is_dispatch_target(target.value)
         )
 
@@ -3834,6 +3916,18 @@ def validate_computational_implementation_target(
     except SyntaxError as exc:
         fail(f"{claim_id} implementation source {path_text} is invalid Python: {exc}")
 
+    if _module_mutates_unittest_dispatch(tree):
+        fail(
+            f"{claim_id} implementation source {path_text} mutates "
+            "protected unittest behavior"
+        )
+    forbidden_runtime = _forbidden_regression_runtime_primitive(tree)
+    if forbidden_runtime is not None:
+        fail(
+            f"{claim_id} implementation source {path_text} uses forbidden "
+            f"runtime primitive {forbidden_runtime!r}"
+        )
+
     function_name = match.group(1)
     matches = [
         node
@@ -3937,6 +4031,44 @@ implementation_module = payload.get("implementation_module")
 implementation_filename = payload.get("implementation_filename")
 class_name, anchor, filename, run_name = sys.argv[1:5]
 
+protected_testcase_type = unittest.TestCase
+protected_testcase_run = unittest.TestCase.run
+protected_testresult_type = unittest.TestResult
+protected_unittest_signature = (
+    unittest.TestCase,
+    unittest.TestCase.run,
+    unittest.TestCase._callTestMethod,
+    unittest.TestCase.assertEqual,
+    unittest.TestCase.assertTrue,
+    unittest.TestResult,
+    unittest.TestResult.startTest,
+    unittest.TestResult.stopTest,
+    unittest.TestResult.addSuccess,
+    unittest.TestResult.addFailure,
+    unittest.TestResult.addError,
+    unittest.TestResult.addSkip,
+    unittest.TestResult.addExpectedFailure,
+    unittest.TestResult.addUnexpectedSuccess,
+)
+
+def _unittest_runtime_is_pristine():
+    return protected_unittest_signature == (
+        unittest.TestCase,
+        unittest.TestCase.run,
+        unittest.TestCase._callTestMethod,
+        unittest.TestCase.assertEqual,
+        unittest.TestCase.assertTrue,
+        unittest.TestResult,
+        unittest.TestResult.startTest,
+        unittest.TestResult.stopTest,
+        unittest.TestResult.addSuccess,
+        unittest.TestResult.addFailure,
+        unittest.TestResult.addError,
+        unittest.TestResult.addSkip,
+        unittest.TestResult.addExpectedFailure,
+        unittest.TestResult.addUnexpectedSuccess,
+    )
+
 completion_nonce = secrets.token_hex(32)
 print(f"COSMO-RUN-BEGIN:{completion_nonce}", flush=True)
 
@@ -3958,6 +4090,10 @@ if implementation_source is not None and implementation_module is not None:
         if not name.startswith("_") and hasattr(package, name):
             setattr(package, name, value)
 
+if not _unittest_runtime_is_pristine():
+    print("implementation mutated protected unittest behavior", file=sys.stderr)
+    raise SystemExit(26)
+
 namespace = {
     "__name__": run_name,
     "__file__": filename,
@@ -3971,14 +4107,18 @@ except BaseException as exc:
     print(f"load failed: {type(exc).__name__}: {exc}", file=sys.stderr)
     raise SystemExit(20)
 
+if not _unittest_runtime_is_pristine():
+    print("regression module mutated protected unittest behavior", file=sys.stderr)
+    raise SystemExit(27)
+
 case_type = namespace.get(class_name)
-if not isinstance(case_type, type) or not issubclass(case_type, unittest.TestCase):
+if not isinstance(case_type, type) or not issubclass(case_type, protected_testcase_type):
     print("claimed class is not unittest.TestCase", file=sys.stderr)
     raise SystemExit(21)
 
 case = case_type(anchor)
-result = unittest.TestResult()
-unittest.TestCase.run(case, result)
+result = protected_testresult_type()
+protected_testcase_run(case, result)
 
 if result.testsRun != 1:
     print(f"testsRun={result.testsRun}", file=sys.stderr)
@@ -3994,26 +4134,36 @@ if result.failures or result.errors or result.unexpectedSuccesses:
     rendered = details[0][1].splitlines()[-1] if details else "unexpected success"
     print(rendered, file=sys.stderr)
     raise SystemExit(25)
+if not _unittest_runtime_is_pristine():
+    print("test execution mutated protected unittest behavior", file=sys.stderr)
+    raise SystemExit(28)
 
 print(f"COSMO-RUN-END:{completion_nonce}", flush=True)
 '''
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            runner,
-            class_name,
-            anchor,
-            str(path),
-            f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
-        ],
-        cwd=ROOT,
-        input=payload,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                runner,
+                class_name,
+                anchor,
+                str(path),
+                f"_cosmo_claim_regression_{claim_id.replace('-', '_')}",
+            ],
+            cwd=ROOT,
+            input=payload,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=REGRESSION_EXECUTION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        fail(
+            f"{claim_id} regression evidence {path_text}:{anchor} timed out "
+            f"after {REGRESSION_EXECUTION_TIMEOUT_SECONDS} seconds"
+        )
 
     begin_nonces = re.findall(
         r"(?m)^COSMO-RUN-BEGIN:([0-9a-f]{64})$",
@@ -4642,7 +4792,15 @@ def public_assertion_is_negated(
         predicate_prefix = predicate_prefix[
             subordinate_boundaries[-1].end():
         ]
-    if PUBLIC_NEGATION_RE.search(predicate_prefix) is not None:
+    predicate_tail = predicate_prefix.rstrip()
+    if re.search(
+        r"(?:\b(?:does|do|did|is|are|was|were|has|have|had|"
+        r"can|could|would|should|will)\s+not|"
+        r"\bcannot|\bcan't|\bnever|\bfails?\s+to|\bfailed\s+to|"
+        r"\bnot)\s*$",
+        predicate_tail,
+        re.IGNORECASE,
+    ) is not None:
         return True
 
     suffix = text[assertion.end():]
@@ -4800,6 +4958,33 @@ class _VisibleHTMLTextParser(HTMLParser):
             self._close_nearest_optional(
                 frozenset({"dt", "dd"}),
                 frozenset({"dl", "template"}),
+            )
+        elif normalized in {"td", "th"}:
+            self._close_nearest_optional(
+                frozenset({"td", "th"}),
+                frozenset({"tr", "table", "template"}),
+            )
+        elif normalized == "tr":
+            self._close_nearest_optional(
+                frozenset({"td", "th"}),
+                frozenset({"table", "template"}),
+            )
+            self._close_nearest_optional(
+                frozenset({"tr"}),
+                frozenset({"table", "template"}),
+            )
+        elif normalized in {"thead", "tbody", "tfoot"}:
+            self._close_nearest_optional(
+                frozenset({"td", "th"}),
+                frozenset({"table", "template"}),
+            )
+            self._close_nearest_optional(
+                frozenset({"tr"}),
+                frozenset({"table", "template"}),
+            )
+            self._close_nearest_optional(
+                frozenset({"thead", "tbody", "tfoot"}),
+                frozenset({"table", "template"}),
             )
         elif normalized in self.P_IMPLIED_END_STARTS:
             self._close_nearest_optional(
@@ -5139,6 +5324,33 @@ def latex_user_macro_definitions(
     return macros
 
 
+def _latex_braced_argument(
+    text: str,
+    index: int,
+) -> tuple[str, int] | None:
+    """Parse one balanced braced LaTeX argument, including nested braces."""
+    while index < len(text) and text[index].isspace():
+        index += 1
+    if index >= len(text) or text[index] != "{":
+        return None
+    depth = 1
+    start = index + 1
+    position = start
+    while position < len(text):
+        character = text[position]
+        if character == "\\":
+            position += 2
+            continue
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:position], position + 1
+        position += 1
+    return None
+
+
 def expand_latex_user_macros(
     text: str,
     macros: dict[str, tuple[int, str]],
@@ -5149,41 +5361,55 @@ def expand_latex_user_macros(
         changed = False
         for macro, (argument_count, body) in macros.items():
             if argument_count == 0:
-                def replace_zero(
-                    _match: re.Match[str],
-                    replacement: str = body,
-                ) -> str:
-                    return replacement
-
                 updated = re.sub(
                     re.escape(macro) + r"(?![A-Za-z@])",
-                    replace_zero,
+                    lambda _match, replacement=body: replacement,
                     rendered,
                 )
             else:
-                pattern = (
-                    re.escape(macro)
-                    + r"(?![A-Za-z@])"
-                    + "".join(
-                        r"\s*\{([^{}\n]*)\}"
-                        for _ in range(argument_count)
-                    )
+                invocation_re = re.compile(
+                    re.escape(macro) + r"(?![A-Za-z@])"
                 )
-
-                def replace_arguments(
-                    match: re.Match[str],
-                    replacement: str = body,
-                    count: int = argument_count,
-                ) -> str:
-                    expanded = replacement
-                    for argument_index in range(count):
-                        expanded = expanded.replace(
-                            f"#{argument_index + 1}",
-                            match.group(argument_index + 1),
+                pieces: list[str] = []
+                cursor = 0
+                search_from = 0
+                replaced_any = False
+                while True:
+                    match = invocation_re.search(rendered, search_from)
+                    if match is None:
+                        break
+                    argument_cursor = match.end()
+                    arguments: list[str] = []
+                    valid = True
+                    for _argument_index in range(argument_count):
+                        parsed = _latex_braced_argument(
+                            rendered,
+                            argument_cursor,
                         )
-                    return expanded
-
-                updated = re.sub(pattern, replace_arguments, rendered)
+                        if parsed is None:
+                            valid = False
+                            break
+                        argument, argument_cursor = parsed
+                        arguments.append(argument)
+                    if not valid:
+                        search_from = match.end()
+                        continue
+                    pieces.append(rendered[cursor:match.start()])
+                    expanded = body
+                    for argument_index, argument in enumerate(arguments, start=1):
+                        expanded = expanded.replace(
+                            f"#{argument_index}",
+                            argument,
+                        )
+                    pieces.append(expanded)
+                    cursor = argument_cursor
+                    search_from = argument_cursor
+                    replaced_any = True
+                if replaced_any:
+                    pieces.append(rendered[cursor:])
+                    updated = "".join(pieces)
+                else:
+                    updated = rendered
 
             if updated != rendered:
                 changed = True
