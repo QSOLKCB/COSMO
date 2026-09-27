@@ -103,8 +103,8 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             namespace["render_index"],
         )
         self.assertEqual(
-            INDEX_PATH.read_text(encoding="utf-8"),
-            render_index(self.load_ledger()),
+            INDEX_PATH.read_bytes(),
+            render_index(self.load_ledger()).encode("utf-8"),
         )
 
 
@@ -2147,6 +2147,78 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 unreachable,
             )
 
+    def test_d014_assertions_after_selected_return_are_rejected(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b5.py"
+        ).read_text(encoding="utf-8")
+
+        required_assertions = (
+            "        self.assertEqual(recovered.cube, cube)\n"
+            "        self.assertEqual(\n"
+            "            recovered.storage.corrected_codewords,\n"
+            "            codeword_count,\n"
+            "        )\n"
+        )
+        self.assertEqual(regression_text.count(required_assertions), 1)
+
+        def check_connection(source: str) -> None:
+            validate_connection(
+                "COSMO-D-014",
+                "cosmo_core/storage.py",
+                "def recover_cube_storage",
+                "tests/test_phase_b5.py",
+                "test_full_cube_recovers_one_bit_error_in_every_codeword",
+                source,
+            )
+
+        check_connection(regression_text)
+
+        exits = {
+            "true_branch": (
+                "        if True:\n"
+                "            return\n"
+            ),
+            "else_branch": (
+                "        if False:\n"
+                "            pass\n"
+                "        else:\n"
+                "            return\n"
+            ),
+            "nested_selected_branch": (
+                "        if True:\n"
+                "            if True:\n"
+                "                return\n"
+            ),
+        }
+        for label, prefix in exits.items():
+            with self.subTest(case=label):
+                source = regression_text.replace(
+                    required_assertions,
+                    prefix + required_assertions,
+                    1,
+                )
+                with self.assertRaisesRegex(
+                    SystemExit,
+                    "missing assertEqual pairs",
+                ):
+                    check_connection(source)
+
+        reachable = regression_text.replace(
+            required_assertions,
+            (
+                "        if False:\n"
+                "            return\n"
+                + required_assertions
+            ),
+            1,
+        )
+        check_connection(reachable)
+
     def test_implementation_provenance_requires_executable_project_source(self) -> None:
         namespace = self.load_validator_namespace()
         validate_implementation = cast(
@@ -3781,6 +3853,54 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             self.assertIn("unledgered-public.html", snapshot)
             with self.assertRaises(SystemExit):
                 validate_documents({}, snapshot)
+
+    def test_canonical_index_rejects_noncanonical_line_endings(self) -> None:
+        namespace = self.load_validator_namespace()
+        render_index = cast(
+            Callable[[dict[str, Any]], str],
+            namespace["render_index"],
+        )
+        snapshot_documents = cast(
+            Callable[[Path], dict[str, str]],
+            namespace["snapshot_public_documents"],
+        )
+        validate_index = cast(
+            Callable[[str, dict[str, Any]], None],
+            namespace["validate_canonical_index_text"],
+        )
+
+        ledger = self.load_ledger()
+        canonical = render_index(ledger).encode("utf-8")
+        self.assertIn(b"\n", canonical)
+        self.assertNotIn(b"\r", canonical)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            index = root / "CLAIM-LEDGER.md"
+
+            for label, newline in (
+                ("LF", b"\n"),
+                ("CRLF", b"\r\n"),
+                ("CR", b"\r"),
+            ):
+                with self.subTest(line_endings=label):
+                    payload = canonical.replace(b"\n", newline)
+                    index.write_bytes(payload)
+                    captured = snapshot_documents(root)
+                    captured_text = captured["CLAIM-LEDGER.md"]
+
+                    self.assertEqual(
+                        captured_text.encode("utf-8"),
+                        payload,
+                    )
+                    if label == "LF":
+                        validate_index(captured_text, ledger)
+                    else:
+                        with self.assertRaisesRegex(
+                            SystemExit,
+                            "CLAIM-LEDGER.md differs from canonical JSON rendering",
+                        ):
+                            validate_index(captured_text, ledger)
 
     def test_public_document_discovery_includes_new_root_documents(self) -> None:
         namespace = self.load_validator_namespace()
