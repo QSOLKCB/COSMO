@@ -78,11 +78,15 @@ biomedical transition mechanism.
 \end{definition}
 
 \begin{definition}[Generating morphisms]
-The category is generated (under composition) by the arrows
+This proposed category presentation uses arrows between project state labels
+only. These arrows do not describe physical or biomedical transition
+mechanisms. COSMO-D-001 is limited to the underlying finite-state six-step
+closure; the categorical construction remains an unformalized Phase E design
+target. The proposed generating arrows are
 \[
 \begin{aligned}
-  s &: \EEs \to P_\phigr        &&\text{($\phigr$-SCL golden projection)}\\
-  m &: P_\phigr \to \SiS        &&\text{(materialization / substrate cast)}\\
+  s &: \EEs \to P_\phigr        &&\text{(project state transition)}\\
+  m &: P_\phigr \to \SiS        &&\text{(project state transition)}\\
   t &: \SiS \to \mathsf{Tri}    &&\text{(project transition to TrialityBranch)}\\
   h &: \mathsf{Tri} \to \HPV    &&\text{(project transition to HPV16Layer)}\\
   r &: \HPV \to \Omega          &&\text{(project transition to OuroborosLoop)}\\
@@ -124,10 +128,10 @@ symbolic vocabulary (COSMO-D-010).
 % =====================================================================
 \section{The commuting feedback square}
 % =====================================================================
-Split the descent into a ``symmetry'' path and a ``matter'' path. Introduce
-the auxiliary object $\SiS\!\otimes\!\mathsf{D}$ (substrate equipped with the
-$\DIAG(1,-2,1)$ contrast structure). The two ways of reaching the infected
-layer agree:
+As a Phase E design sketch, split the project-state descent into two candidate
+paths and introduce the auxiliary object $\SiS\!\otimes\!\mathsf{D}$. The
+following diagram is proposed for later formalization; it does not assert that
+the two routes commute:
 
 \begin{center}
 \begin{tikzcd}[column sep=huge, row sep=huge]
@@ -150,9 +154,10 @@ this commuting square.
 \end{proposition}
 
 \begin{interp}
-Reading the square: whether unity first becomes matter and then triplicates,
-or first learns to perceive contrast and is then infected, it arrives at the
-same corrupted reality --- the two routes are naturally isomorphic.
+This diagram is symbolic project vocabulary (COSMO-D-010). It is intended to
+illustrate a possible future categorical comparison of the two project-state
+routes. It does not claim a natural isomorphism, a physical materialization
+process, or a biomedical transition mechanism.
 \end{interp}
 
 % =====================================================================
