@@ -1505,6 +1505,95 @@ def _module_mutates_unittest_dispatch(
     return False
 
 
+FORBIDDEN_REGRESSION_FRAME_ATTRIBUTES = frozenset(
+    {
+        "__closure__",
+        "__globals__",
+        "cr_frame",
+        "f_back",
+        "f_code",
+        "f_globals",
+        "f_locals",
+        "gi_frame",
+        "tb_frame",
+    }
+)
+
+FORBIDDEN_REGRESSION_RUNTIME_CALLS = frozenset(
+    {
+        "builtins.compile",
+        "builtins.eval",
+        "builtins.exec",
+        "compile",
+        "ctypes",
+        "eval",
+        "exec",
+        "gc.get_objects",
+        "inspect.currentframe",
+        "inspect.getouterframes",
+        "inspect.stack",
+        "os._exit",
+        "os.abort",
+        "sys._current_frames",
+        "sys._getframe",
+        "sys.setprofile",
+        "sys.settrace",
+    }
+)
+
+
+def _forbidden_regression_runtime_primitive(
+    tree: ast.Module,
+) -> str | None:
+    """Reject primitives that can forge or bypass isolated-run completion."""
+    aliases: dict[str, str] = {}
+    for statement in tree.body:
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                aliases[alias.asname or alias.name.split(".", 1)[0]] = alias.name
+        elif isinstance(statement, ast.ImportFrom) and statement.module is not None:
+            for alias in statement.names:
+                aliases[alias.asname or alias.name] = (
+                    statement.module + "." + alias.name
+                )
+
+    def resolved_path(expression: ast.expr) -> str | None:
+        if isinstance(expression, ast.Name):
+            return aliases.get(expression.id, expression.id)
+        if isinstance(expression, ast.Attribute):
+            parent = resolved_path(expression.value)
+            if parent is not None:
+                return parent + "." + expression.attr
+        return None
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr in FORBIDDEN_REGRESSION_FRAME_ATTRIBUTES
+        ):
+            return node.attr
+        if not isinstance(node, ast.Call):
+            continue
+        call_path = resolved_path(node.func)
+        if call_path is not None:
+            if call_path in FORBIDDEN_REGRESSION_RUNTIME_CALLS:
+                return call_path
+            if call_path.startswith("ctypes."):
+                return call_path
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in (
+                FORBIDDEN_REGRESSION_FRAME_ATTRIBUTES
+                | {"_current_frames", "_getframe"}
+            )
+        ):
+            return f"getattr(..., {node.args[1].value!r})"
+    return None
+
+
 def locate_unittest_regression(
     claim_id: str,
     path_text: str,
@@ -1669,13 +1758,184 @@ def _regression_import_binding(
     return None
 
 
+class _ReviewedExportMutationFinder(ast.NodeVisitor):
+    """Detect mutation of the module/package export behind reviewed evidence."""
+
+    def __init__(
+        self,
+        aliases: set[str],
+        qualified_targets: set[str],
+        function_name: str,
+    ) -> None:
+        self.aliases = aliases
+        self.qualified_targets = qualified_targets
+        self.function_name = function_name
+        self.found = False
+
+    def _is_source_object(self, node: ast.expr) -> bool:
+        return isinstance(node, ast.Name) and node.id in self.aliases
+
+    def _is_export_attribute(self, node: ast.expr) -> bool:
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == self.function_name
+            and self._is_source_object(node.value)
+        )
+
+    def _is_export_subscript(self, node: ast.expr) -> bool:
+        if not isinstance(node, ast.Subscript):
+            return False
+        key = node.slice
+        if not (
+            isinstance(key, ast.Constant)
+            and key.value == self.function_name
+        ):
+            return False
+        value = node.value
+        if (
+            isinstance(value, ast.Attribute)
+            and value.attr == "__dict__"
+            and self._is_source_object(value.value)
+        ):
+            return True
+        return (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "vars"
+            and len(value.args) == 1
+            and self._is_source_object(value.args[0])
+        )
+
+    def _target_mutates_export(self, target: ast.expr) -> bool:
+        if self._is_export_attribute(target) or self._is_export_subscript(target):
+            return True
+        if isinstance(target, (ast.Tuple, ast.List)):
+            return any(self._target_mutates_export(item) for item in target.elts)
+        return False
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if any(self._target_mutates_export(target) for target in node.targets):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if self._target_mutates_export(node.target):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        if self._target_mutates_export(node.target):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        if (
+            isinstance(func, ast.Name)
+            and func.id in {"setattr", "delattr"}
+            and len(node.args) >= 2
+            and self._is_source_object(node.args[0])
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == self.function_name
+        ):
+            self.found = True
+            return
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in {"__setattr__", "__delattr__"}
+            and self._is_source_object(func.value)
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == self.function_name
+        ):
+            self.found = True
+            return
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "update"
+            and isinstance(func.value, ast.Attribute)
+            and func.value.attr == "__dict__"
+            and self._is_source_object(func.value.value)
+        ):
+            for argument in node.args:
+                if not isinstance(argument, ast.Dict):
+                    self.found = True
+                    return
+                for key in argument.keys:
+                    if (
+                        key is None
+                        or (
+                            isinstance(key, ast.Constant)
+                            and key.value == self.function_name
+                        )
+                    ):
+                        self.found = True
+                        return
+            for keyword in node.keywords:
+                if keyword.arg is None or keyword.arg == self.function_name:
+                    self.found = True
+                    return
+        if (
+            isinstance(func, (ast.Name, ast.Attribute))
+            and (
+                (isinstance(func, ast.Name) and func.id == "patch")
+                or (isinstance(func, ast.Attribute) and func.attr == "patch")
+            )
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and node.args[0].value in self.qualified_targets
+        ):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+
 def _module_mutates_binding_after_import(
     regression_tree: ast.Module,
     module_name: str,
     function_name: str,
     binding: str,
 ) -> bool:
-    """Reject module-load rebinding after the reviewed import is established."""
+    """Reject mutation of either the reviewed export or its imported binding."""
+    source_modules = {module_name}
+    if _package_reexports_function(module_name, function_name):
+        source_modules.add("cosmo_core")
+
+    source_aliases: set[str] = set()
+    for statement in regression_tree.body:
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                if alias.name in source_modules:
+                    source_aliases.add(
+                        alias.asname or alias.name.split(".", 1)[0]
+                    )
+        elif isinstance(statement, ast.ImportFrom):
+            if statement.level != 0:
+                continue
+            if statement.module == "cosmo_core":
+                expected_child = module_name.removeprefix("cosmo_core.")
+                for alias in statement.names:
+                    if alias.name == expected_child:
+                        source_aliases.add(alias.asname or alias.name)
+
+    if source_aliases:
+        qualified_targets = {
+            f"{source_module}.{function_name}"
+            for source_module in source_modules
+        }
+        export_finder = _ReviewedExportMutationFinder(
+            source_aliases,
+            qualified_targets,
+            function_name,
+        )
+        export_finder.visit(regression_tree)
+        if export_finder.found:
+            return True
+
     import_index: int | None = None
     for index, statement in enumerate(regression_tree.body):
         if not isinstance(statement, ast.ImportFrom) or statement.level != 0:
@@ -1712,7 +1972,7 @@ def _module_mutates_binding_after_import(
     return False
 
 
-EAGER_GENERATOR_CONSUMERS = frozenset(
+EAGER_GENERATOR_CONSUMERS = frozenset(EAGER_GENERATOR_CONSUMERS = frozenset(
     {
         "all",
         "any",
@@ -2088,6 +2348,7 @@ def _static_selected_exit_kind(
             return "break"
         if isinstance(statement, ast.Continue):
             return "continue"
+
         if isinstance(statement, ast.If):
             condition = _static_boolean_value(statement.test, module_constants)
             if condition is None:
@@ -2096,10 +2357,101 @@ def _static_selected_exit_kind(
             exit_kind = _static_selected_exit_kind(branch, module_constants)
             if exit_kind is not None:
                 return exit_kind
+            continue
+
+        if isinstance(statement, ast.Match):
+            subject_known, subject_value = _static_literal_value(
+                statement.subject
+            )
+            if not subject_known:
+                continue
+            for case in statement.cases:
+                pattern_match = _static_match_pattern_matches(
+                    case.pattern,
+                    subject_value,
+                )
+                if pattern_match is False:
+                    continue
+                guard_value = (
+                    _static_boolean_value(case.guard, module_constants)
+                    if case.guard is not None
+                    else True
+                )
+                if guard_value is False:
+                    continue
+                if pattern_match is True and guard_value is True:
+                    return _static_selected_exit_kind(
+                        case.body,
+                        module_constants,
+                    )
+                break
+            continue
+
+        if isinstance(statement, ast.With):
+            exit_kind = _static_selected_exit_kind(
+                statement.body,
+                module_constants,
+            )
+            if exit_kind is not None:
+                return exit_kind
+            continue
+
+        if isinstance(statement, ast.Try):
+            final_exit = _static_selected_exit_kind(
+                statement.finalbody,
+                module_constants,
+            )
+            if final_exit is not None:
+                return final_exit
+            body_exit = _static_selected_exit_kind(
+                statement.body,
+                module_constants,
+            )
+            if body_exit == "return":
+                return body_exit
+            continue
+
+        if isinstance(statement, ast.While):
+            condition = _static_boolean_value(
+                statement.test,
+                module_constants,
+            )
+            if condition is False:
+                exit_kind = _static_selected_exit_kind(
+                    statement.orelse,
+                    module_constants,
+                )
+                if exit_kind is not None:
+                    return exit_kind
+            elif condition is True:
+                body_exit = _static_selected_exit_kind(
+                    statement.body,
+                    module_constants,
+                )
+                if body_exit == "return":
+                    return body_exit
+            continue
+
+        if isinstance(statement, (ast.For, ast.AsyncFor)):
+            has_items = _static_iterable_has_items(statement.iter)
+            if has_items is True:
+                body_exit = _static_selected_exit_kind(
+                    statement.body,
+                    module_constants,
+                )
+                if body_exit == "return":
+                    return body_exit
+            elif has_items is False:
+                exit_kind = _static_selected_exit_kind(
+                    statement.orelse,
+                    module_constants,
+                )
+                if exit_kind is not None:
+                    return exit_kind
     return None
 
 
-def _expression_is_obviously_nonraising(expression: ast.expr | None) -> bool:
+def _expression_is_obviously_nonraising(def _expression_is_obviously_nonraising(expression: ast.expr | None) -> bool:
     if expression is None or isinstance(expression, ast.Constant):
         return True
     if isinstance(expression, (ast.Tuple, ast.List, ast.Set)):
@@ -2872,6 +3224,7 @@ def _reachable_assert_equal_pairs(
             subject_known, subject_value = _static_literal_value(
                 statement.subject
             )
+            selected_exit: str | None = None
             for case in statement.cases:
                 pattern_match = (
                     _static_match_pattern_matches(case.pattern, subject_value)
@@ -2894,7 +3247,13 @@ def _reachable_assert_equal_pairs(
                     )
                 )
                 if pattern_match is True and guard_value is True:
+                    selected_exit = _static_selected_exit_kind(
+                        case.body,
+                        module_constants,
+                    )
                     break
+            if selected_exit is not None:
+                break
             continue
 
         if isinstance(statement, (ast.With, ast.AsyncWith)):
@@ -2933,6 +3292,50 @@ def _reachable_assert_equal_pairs(
                 )
             )
     return observed
+
+
+def _top_level_call_assignment_index(
+    statements: list[ast.stmt],
+    target_name: str,
+    function_name: str,
+) -> int | None:
+    """Locate the reviewed direct result binding in the test method body."""
+    for index, statement in enumerate(statements):
+        if _statement_assigns_call_result(
+            statement,
+            target_name,
+            function_name,
+        ):
+            return index
+    return None
+
+
+def _reviewed_top_level_assert_equal_pairs(
+    statements: list[ast.stmt],
+    module_constants: dict[str, bool],
+) -> set[frozenset[str]]:
+    """Collect direct reviewed assertions until an obvious selected exit."""
+    observed: set[frozenset[str]] = set()
+    for statement in statements:
+        if _static_selected_exit_kind([statement], module_constants) is not None:
+            break
+        pair = _assert_equal_pair(statement)
+        if pair is not None:
+            observed.add(pair)
+    return observed
+
+
+def _reviewed_top_level_has_d003_norm_assertion(
+    statements: list[ast.stmt],
+    module_constants: dict[str, bool],
+) -> bool:
+    """Require the reviewed norm assertion directly after the reviewed call."""
+    for statement in statements:
+        if _static_selected_exit_kind([statement], module_constants) is not None:
+            return False
+        if _is_d003_norm_assertion(statement):
+            return True
+    return False
 
 
 def _statement_assigns_call_result(
@@ -3222,18 +3625,17 @@ def validate_reviewed_computational_regression_semantics(
 ) -> None:
     """Require reviewed result assertions for claim-specific computational evidence."""
     if claim_id == "COSMO-D-003":
-        if not any(
-            _statement_assigns_call_result(
-                statement,
-                "report",
-                imported_binding,
-            )
-            for statement in method.body
-        ):
+        assignment_index = _top_level_call_assignment_index(
+            method.body,
+            "report",
+            imported_binding,
+        )
+        if assignment_index is None:
             fail(
                 f"{claim_id} regression must bind report directly to the "
                 f"reviewed implementation return value {imported_binding}(...)"
             )
+        reviewed_tail = method.body[assignment_index + 1:]
         required_pairs = {
             frozenset({"report.root_count", "240"}),
             frozenset({"report.integer_root_count", "112"}),
@@ -3241,8 +3643,8 @@ def validate_reviewed_computational_regression_semantics(
             frozenset({"report.rank", "8"}),
             frozenset({"report.sha256", "E8_ROOT_TABLE_SHA256"}),
         }
-        observed_pairs = _reachable_assert_equal_pairs(
-            method.body,
+        observed_pairs = _reviewed_top_level_assert_equal_pairs(
+            reviewed_tail,
             module_constants,
         )
         missing = required_pairs - observed_pairs
@@ -3252,8 +3654,8 @@ def validate_reviewed_computational_regression_semantics(
                 f"{claim_id} regression must verify reviewed E8 report fields; "
                 f"missing assertEqual pairs {rendered}"
             )
-        if not _reachable_has_d003_norm_assertion(
-            method.body,
+        if not _reviewed_top_level_has_d003_norm_assertion(
+            reviewed_tail,
             module_constants,
         ):
             fail(
@@ -3265,16 +3667,17 @@ def validate_reviewed_computational_regression_semantics(
     if claim_id != "COSMO-D-014":
         return
 
-    if not _reachable_assignment_from_call(
+    assignment_index = _top_level_call_assignment_index(
         method.body,
         "recovered",
         imported_binding,
-        module_constants,
-    ):
+    )
+    if assignment_index is None:
         fail(
             f"{claim_id} regression must bind recovered to the reviewed "
             f"implementation return value {imported_binding}(...)"
         )
+    reviewed_tail = method.body[assignment_index + 1:]
 
     required_pairs = {
         frozenset({"recovered.cube", "cube"}),
@@ -3285,8 +3688,8 @@ def validate_reviewed_computational_regression_semantics(
             }
         ),
     }
-    observed_pairs = _reachable_assert_equal_pairs(
-        method.body,
+    observed_pairs = _reviewed_top_level_assert_equal_pairs(
+        reviewed_tail,
         module_constants,
     )
 
@@ -3321,6 +3724,13 @@ def validate_computational_evidence_connection(
         )
     except SyntaxError as exc:
         fail(f"{claim_id} regression source {regression_path} is invalid Python: {exc}")
+
+    forbidden_runtime = _forbidden_regression_runtime_primitive(regression_tree)
+    if forbidden_runtime is not None:
+        fail(
+            f"{claim_id} regression {regression_path} uses forbidden runtime "
+            f"primitive {forbidden_runtime!r}"
+        )
 
     class_name, method = locate_unittest_regression(
         claim_id,
@@ -3472,6 +3882,17 @@ def validate_computational_regression_target(
     implementation_text: str | None = None,
 ) -> None:
     """Execute the exact unittest method claimed as computational evidence."""
+    try:
+        regression_tree = ast.parse(text, filename=path_text)
+    except SyntaxError as exc:
+        fail(f"{claim_id} regression source {path_text} is invalid Python: {exc}")
+    forbidden_runtime = _forbidden_regression_runtime_primitive(regression_tree)
+    if forbidden_runtime is not None:
+        fail(
+            f"{claim_id} regression {path_text} uses forbidden runtime "
+            f"primitive {forbidden_runtime!r}"
+        )
+
     class_name, _method = locate_unittest_regression(
         claim_id,
         path_text,
@@ -3509,14 +3930,18 @@ implementation_source = payload.get("implementation_source")
 implementation_module = payload.get("implementation_module")
 implementation_filename = payload.get("implementation_filename")
 class_name, anchor, filename, run_name = sys.argv[1:5]
-completion_path = Path({str(Path("/tmp/placeholder"))!r})
-completion_path = Path({""!r})
-'''
-        runner = runner.replace(
-            "completion_path = Path('')",
-            f"completion_path = Path({str(completion_path)!r})",
-        ) + f'''
-completion_nonce = {completion_nonce!r}
+
+def _make_authenticated_completion_writer():
+    destination = Path({str(completion_path)!r})
+    secret = {completion_nonce!r}
+
+    def _write_authenticated_completion():
+        destination.write_text(secret, encoding="ascii")
+
+    return _write_authenticated_completion
+
+_write_authenticated_completion = _make_authenticated_completion_writer()
+del _make_authenticated_completion_writer
 
 if implementation_source is not None and implementation_module is not None:
     package_name, _, child_name = implementation_module.rpartition(".")
@@ -3573,7 +3998,7 @@ if result.failures or result.errors or result.unexpectedSuccesses:
     print(rendered, file=sys.stderr)
     raise SystemExit(25)
 
-completion_path.write_text(completion_nonce, encoding="ascii")
+_write_authenticated_completion()
 '''
         completed = subprocess.run(
             [
@@ -4574,7 +4999,7 @@ def strip_latex_disabled_branches(text: str) -> str:
 def latex_user_macro_definitions(
     text: str,
 ) -> dict[str, tuple[int, str]]:
-    """Extract simple zero/one-argument user macros and rendered bodies."""
+    """Extract simple zero-to-nine-argument user macros and rendered bodies."""
     command_re = re.compile(
         r"\\(?:newcommand|renewcommand|providecommand)\*?"
     )
@@ -4642,10 +5067,13 @@ def latex_user_macro_definitions(
                 cursor = match.end()
                 continue
             raw_count = text[index + 1:bracket_end].strip()
-            if raw_count != "1":
+            if not re.fullmatch(r"[0-9]", raw_count):
                 cursor = match.end()
                 continue
-            argument_count = 1
+            argument_count = int(raw_count)
+            if argument_count > 9:
+                cursor = match.end()
+                continue
             index = skip_space(bracket_end + 1)
             if index < len(text) and text[index] == "[":
                 cursor = match.end()
@@ -4669,7 +5097,7 @@ def expand_latex_user_macros(
     text: str,
     macros: dict[str, tuple[int, str]],
 ) -> str:
-    """Expand visible zero/one-argument user macro invocations."""
+    """Expand visible zero-to-nine-argument user macro invocations."""
     rendered = text
     for _ in range(max(1, len(macros) + 1)):
         changed = False
@@ -4689,16 +5117,27 @@ def expand_latex_user_macros(
             else:
                 pattern = (
                     re.escape(macro)
-                    + r"(?![A-Za-z@])\s*\{([^{}\n]*)\}"
+                    + r"(?![A-Za-z@])"
+                    + "".join(
+                        r"\s*\{([^{}\n]*)\}"
+                        for _ in range(argument_count)
+                    )
                 )
 
-                def replace_one(
+                def replace_arguments(
                     match: re.Match[str],
                     replacement: str = body,
+                    count: int = argument_count,
                 ) -> str:
-                    return replacement.replace("#1", match.group(1))
+                    expanded = replacement
+                    for argument_index in range(count):
+                        expanded = expanded.replace(
+                            f"#{argument_index + 1}",
+                            match.group(argument_index + 1),
+                        )
+                    return expanded
 
-                updated = re.sub(pattern, replace_one, rendered)
+                updated = re.sub(pattern, replace_arguments, rendered)
 
             if updated != rendered:
                 changed = True
@@ -4818,6 +5257,30 @@ def normalize_latex_visible_text(text: str) -> str:
     return text.replace("{", "").replace("}", "")
 
 
+def strip_latex_comments(text: str) -> str:
+    """Remove TeX comments before interpreting macros or conditionals."""
+    lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        comment_start: int | None = None
+        for index, character in enumerate(line):
+            if character != "%":
+                continue
+            backslashes = 0
+            cursor = index - 1
+            while cursor >= 0 and line[cursor] == "\\":
+                backslashes += 1
+                cursor -= 1
+            if backslashes % 2 == 0:
+                comment_start = index
+                break
+        if comment_start is None:
+            lines.append(line)
+            continue
+        # TeX comments consume their terminating physical newline.
+        lines.append(line[:comment_start])
+    return "".join(lines)
+
+
 def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
     """Remove non-rendered comments/code before public-claim scanning."""
     suffix = Path(path_text).suffix.lower()
@@ -4836,6 +5299,7 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
     if suffix != ".tex":
         return text
 
+    text = strip_latex_comments(text)
     user_macros = latex_user_macro_definitions(text)
     text = strip_latex_macro_definitions(text)
     text = expand_latex_user_macros(text, user_macros)
@@ -4852,27 +5316,7 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
         text,
     )
 
-    lines: list[str] = []
-    for line in text.splitlines(keepends=True):
-        comment_start: int | None = None
-        for index, character in enumerate(line):
-            if character != "%":
-                continue
-            backslashes = 0
-            cursor = index - 1
-            while cursor >= 0 and line[cursor] == "\\":
-                backslashes += 1
-                cursor -= 1
-            if backslashes % 2 == 0:
-                comment_start = index
-                break
-        if comment_start is None:
-            lines.append(line)
-            continue
-        # TeX comments consume their terminating physical newline, so
-        # visible text on the next source line joins directly to this prefix.
-        lines.append(line[:comment_start])
-    return "".join(lines)
+    return text
 
 
 def validate_public_claim_text(
