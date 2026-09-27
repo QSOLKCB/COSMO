@@ -5653,7 +5653,6 @@ def normalize_markdown_provenance_text(text: str) -> str:
 
 
 def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
-def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
     """Keep rendered block boundaries when binding claim IDs."""
     suffix = Path(path_text).suffix.lower()
     if suffix == ".tex":
