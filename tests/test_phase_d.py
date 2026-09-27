@@ -5030,5 +5030,38 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             )
 
 
+    def test_markdown_provenance_anchor_must_be_visible(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_provenance = cast(
+            Callable[
+                [str, str, object, dict[str, str] | None],
+                set[str],
+            ],
+            namespace["validate_provenance"],
+        )
+        claim = next(
+            item
+            for item in self.load_ledger()["claims"]
+            if item["id"] == "COSMO-D-006"
+        )
+        with self.assertRaisesRegex(SystemExit, "anchor"):
+            validate_provenance(
+                "COSMO-D-006",
+                "SCIENTIFIC",
+                claim["provenance"],
+                {
+                    "CLAIM-LEDGER.md": (
+                        '<span hidden>NC_001526.4</span>'
+                    )
+                },
+            )
+        validate_provenance(
+            "COSMO-D-006",
+            "SCIENTIFIC",
+            claim["provenance"],
+            {"CLAIM-LEDGER.md": "RefSeq=NC_001526.4"},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
