@@ -1079,6 +1079,67 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                     snapshot,
                 )
 
+    def test_regression_executes_frozen_implementation_bytes(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_regression = cast(
+            Callable[
+                [str, str, str, Path, str, str | None, str | None],
+                None,
+            ],
+            namespace["validate_computational_regression_target"],
+        )
+        source = (
+            "import unittest\n"
+            "from cosmo_core import validate_e8_root_system\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        validate_e8_root_system(())\n"
+        )
+        frozen_implementation = (
+            "def validate_e8_root_system(_roots):\n"
+            "    raise RuntimeError('frozen implementation failure')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "test_regression.py"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                validate_regression(
+                    "COSMO-D-999",
+                    "tests/test_regression.py",
+                    "test_required_regression",
+                    path,
+                    source,
+                    "cosmo_core/e8.py",
+                    frozen_implementation,
+                )
+
+    def test_regression_completion_marker_cannot_be_spoofed(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_regression = cast(
+            Callable[[str, str, str, Path, str], None],
+            namespace["validate_computational_regression_target"],
+        )
+        source = (
+            "import os\n"
+            "import unittest\n"
+            "print('__COSMO_REGRESSION_OK__', flush=True)\n"
+            "os._exit(0)\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        self.fail('never executed')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "test_regression.py"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                validate_regression(
+                    "COSMO-D-999",
+                    "tests/test_regression.py",
+                    "test_required_regression",
+                    path,
+                    source,
+                )
+
     def test_regression_execution_isolates_parent_module_mutation(self) -> None:
         namespace = self.load_validator_namespace()
         validate_regression = cast(
@@ -1860,6 +1921,31 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "test_required_regression", rebound_by_with_target,
             )
 
+        fixture_helper_mutation = (
+            "import unittest\n"
+            "from cosmo_core.e8 import validate_e8_root_system\n"
+            "def no_op(*_args):\n"
+            "    return None\n"
+            "def disable_reviewed_validator() -> None:\n"
+            "    setattr(\n"
+            "        validate_e8_root_system, '__code__', no_op.__code__\n"
+            "    )\n"
+            "class RegressionEvidence(unittest.TestCase):\n"
+            "    def setUp(self) -> None:\n"
+            "        disable_reviewed_validator()\n"
+            "    def test_required_regression(self) -> None:\n"
+            "        validate_e8_root_system(())\n"
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_regression.py",
+                "test_required_regression",
+                fixture_helper_mutation,
+            )
+
         patched_binding = (
             "import unittest\n"
             "from unittest.mock import Mock, patch\n"
@@ -1897,6 +1983,45 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
                 "tests/test_regression.py",
                 "test_required_regression",
                 aliased_import_with_shadow,
+            )
+
+    def test_d003_regression_requires_reviewed_report_assertions(self) -> None:
+        namespace = self.load_validator_namespace()
+        validate_connection = cast(
+            Callable[[str, str, str, str, str, str], None],
+            namespace["validate_computational_evidence_connection"],
+        )
+        regression_text = (
+            REPOSITORY_ROOT / "tests" / "test_phase_b3.py"
+        ).read_text(encoding="utf-8")
+        validate_connection(
+            "COSMO-D-003",
+            "cosmo_core/e8.py",
+            "def validate_e8_root_system",
+            "tests/test_phase_b3.py",
+            "test_root_system_report_has_rank_eight_and_norm_two",
+            regression_text,
+        )
+        start = regression_text.index(
+            "        self.assertEqual(report.root_count, 240)\n"
+        )
+        end = regression_text.index(
+            "    def test_reflections_are_canonically_ordered_by_root",
+            start,
+        )
+        weakened = (
+            regression_text[:start]
+            + "        _ = report\n"
+            + regression_text[end:]
+        )
+        with self.assertRaises(SystemExit):
+            validate_connection(
+                "COSMO-D-003",
+                "cosmo_core/e8.py",
+                "def validate_e8_root_system",
+                "tests/test_phase_b3.py",
+                "test_root_system_report_has_rank_eight_and_norm_two",
+                weakened,
             )
 
     def test_d014_regression_requires_reviewed_recovery_assertions(self) -> None:
@@ -3604,6 +3729,34 @@ class PhaseDClaimLedgerTests(unittest.TestCase):
             )
             snapshot = snapshot_documents(root)
             target.unlink()
+            with self.assertRaises(SystemExit):
+                validate_documents({}, snapshot)
+
+    def test_public_latex_transclusions_are_scanned(self) -> None:
+        namespace = self.load_validator_namespace()
+        snapshot_documents = cast(
+            Callable[[Path], dict[str, str]],
+            namespace["snapshot_public_documents"],
+        )
+        validate_documents = cast(
+            Callable[[dict[str, str], dict[str, str] | None], None],
+            namespace["validate_public_documents"],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "included-claim.tex").write_text(
+                "\\input{bridge.txt}\n",
+                encoding="utf-8",
+            )
+            (root / "bridge.txt").write_text(
+                "Spin(8) triality causes HPV16 capsid assembly.\n",
+                encoding="utf-8",
+            )
+            snapshot = snapshot_documents(root)
+            self.assertIn(
+                "Spin(8) triality causes HPV16 capsid assembly.",
+                snapshot["included-claim.tex"],
+            )
             with self.assertRaises(SystemExit):
                 validate_documents({}, snapshot)
 
