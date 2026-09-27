@@ -517,7 +517,8 @@ PUBLIC_DOMAIN_PATTERNS: dict[str, re.Pattern[str]] = {
         re.IGNORECASE,
     ),
     "biomedicine": re.compile(
-        r"\b(?:HPV16|HPV|capsid|p16)\b",
+        r"\b(?:HPV16|HPV|capsid|p16|human\s+papillomavirus"
+        r"(?:\s+type\s+16)?)\b",
         re.IGNORECASE,
     ),
     "materials_science": re.compile(
@@ -538,7 +539,10 @@ PUBLIC_ENTITY_PATTERNS: dict[str, re.Pattern[str]] = {
     "triality": re.compile(r"\btriality\b", re.IGNORECASE),
     "e8": re.compile(r"\b(?:E8|E_8)\b", re.IGNORECASE),
     "weyl": re.compile(r"\bWeyl\b", re.IGNORECASE),
-    "hpv": re.compile(r"\b(?:HPV16|HPV)\b", re.IGNORECASE),
+    "hpv": re.compile(
+        r"\b(?:HPV16|HPV|human\s+papillomavirus(?:\s+type\s+16)?)\b",
+        re.IGNORECASE,
+    ),
     "capsid": re.compile(r"\bcapsid\b", re.IGNORECASE),
     "e6": re.compile(r"\bE6\b", re.IGNORECASE),
     "e7": re.compile(r"\bE7\b", re.IGNORECASE),
@@ -819,6 +823,34 @@ def canonical_identifier_url(identifier_type: str, value: str) -> str:
     if identifier_type == "DOI":
         return f"https://doi.org/{value}"
     raise AssertionError(f"identifier type {identifier_type!r} is not URL-bound")
+
+
+SOURCE_RECORD_FIELDS = frozenset(
+    {
+        "id",
+        "kind",
+        "title",
+        "url",
+        "identifiers",
+        "domain",
+        "identifier_urls",
+    }
+)
+
+
+def validate_reviewed_source_fields(
+    source_id: str,
+    source: dict[str, Any],
+) -> None:
+    """Reject missing or unreviewed fields in canonical source records."""
+    actual_fields = set(source)
+    if actual_fields != SOURCE_RECORD_FIELDS:
+        missing = sorted(SOURCE_RECORD_FIELDS - actual_fields)
+        extra = sorted(actual_fields - SOURCE_RECORD_FIELDS)
+        fail(
+            f"{source_id} source record fields differ from reviewed schema; "
+            f"missing={missing}, extra={extra}"
+        )
 
 
 def validate_reviewed_source_record(
@@ -1133,6 +1165,12 @@ def locate_unittest_regression(
                     "Phase D requires a synchronously executed unittest method"
                 )
             if isinstance(member, ast.FunctionDef) and member.name == anchor:
+                if member.decorator_list:
+                    fail(
+                        f"{claim_id} regression anchor {anchor!r} must be "
+                        "undecorated so the reviewed method body is the "
+                        "executed unittest method"
+                    )
                 if function_contains_yield(member):
                     fail(
                         f"{claim_id} regression anchor {anchor!r} may not be "
@@ -1211,6 +1249,12 @@ class _CallFinder(ast.NodeVisitor):
             self.found = True
             return
         self.generic_visit(node)
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        # A generator body is deferred. Python evaluates only the outermost
+        # iterable when the generator object is created.
+        if node.generators:
+            self.visit(node.generators[0].iter)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         return
@@ -1391,6 +1435,68 @@ def _static_selected_exit_kind(
     return None
 
 
+def _expression_is_obviously_nonraising(expression: ast.expr | None) -> bool:
+    if expression is None or isinstance(expression, ast.Constant):
+        return True
+    if isinstance(expression, (ast.Tuple, ast.List, ast.Set)):
+        return all(
+            _expression_is_obviously_nonraising(item)
+            for item in expression.elts
+        )
+    if isinstance(expression, ast.Dict):
+        return all(
+            _expression_is_obviously_nonraising(item)
+            for item in [*expression.keys, *expression.values]
+            if item is not None
+        )
+    return False
+
+
+def _assignment_target_is_obviously_safe(target: ast.expr) -> bool:
+    if isinstance(target, ast.Name):
+        return True
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return all(
+            _assignment_target_is_obviously_safe(item)
+            for item in target.elts
+        )
+    return False
+
+
+def _statements_may_raise(statements: list[ast.stmt]) -> bool:
+    """Return false only for statement sequences that are trivially non-raising."""
+    for statement in statements:
+        if isinstance(statement, (ast.Pass, ast.Break, ast.Continue)):
+            continue
+        if isinstance(statement, ast.Return):
+            if _expression_is_obviously_nonraising(statement.value):
+                continue
+            return True
+        if isinstance(statement, ast.Expr):
+            if _expression_is_obviously_nonraising(statement.value):
+                continue
+            return True
+        if isinstance(statement, ast.Assign):
+            if (
+                _expression_is_obviously_nonraising(statement.value)
+                and all(
+                    _assignment_target_is_obviously_safe(target)
+                    for target in statement.targets
+                )
+            ):
+                continue
+            return True
+        if isinstance(statement, ast.AnnAssign):
+            if (
+                _assignment_target_is_obviously_safe(statement.target)
+                and _expression_is_obviously_nonraising(statement.value)
+            ):
+                continue
+            return True
+        return True
+    return False
+
+
 def _reachable_statements_call_function(
     statements: list[ast.stmt],
     function_name: str,
@@ -1492,7 +1598,10 @@ def _reachable_statements_call_function(
                 statement.body,
                 module_constants,
             )
-            if body_exit not in {"return", "break", "continue"}:
+            if (
+                body_exit not in {"return", "break", "continue"}
+                and _statements_may_raise(statement.body)
+            ):
                 for handler in statement.handlers:
                     if _reachable_statements_call_function(
                         handler.body,
@@ -1500,6 +1609,7 @@ def _reachable_statements_call_function(
                         module_constants,
                     ):
                         return True
+            if body_exit not in {"return", "break", "continue"}:
                 if _reachable_statements_call_function(
                     statement.orelse,
                     function_name,
@@ -1633,6 +1743,18 @@ class _BindingMutationFinder(ast.NodeVisitor):
 
 
 def _method_mutates_binding(method: ast.FunctionDef, binding: str) -> bool:
+    parameters = [
+        *method.args.posonlyargs,
+        *method.args.args,
+        *method.args.kwonlyargs,
+    ]
+    if method.args.vararg is not None:
+        parameters.append(method.args.vararg)
+    if method.args.kwarg is not None:
+        parameters.append(method.args.kwarg)
+    if any(parameter.arg == binding for parameter in parameters):
+        return True
+
     finder = _BindingMutationFinder(binding)
     for statement in method.body:
         finder.visit(statement)
@@ -2032,6 +2154,7 @@ def render_index(ledger: dict[str, Any]) -> str:
         if not isinstance(source, dict):
             fail("source entries must be objects")
         source_id = require_inline_string(source.get("id"), "source id")
+        validate_reviewed_source_fields(source_id, source)
         kind = validate_source_kind(source_id, source.get("kind"))
         source_domain = validate_source_domain(source_id, source.get("domain"))
         title = require_inline_string(source.get("title"), f"{source_id} title")
@@ -2500,8 +2623,11 @@ def normalize_markdown_visible_text(text: str) -> str:
 
 
 def split_public_rendered_blocks(path_text: str, text: str) -> list[str]:
-    """Keep rendered Markdown block boundaries when binding claim IDs."""
-    if Path(path_text).suffix.lower() in {".md", ".markdown"}:
+    """Keep rendered block boundaries when binding claim IDs."""
+    suffix = Path(path_text).suffix.lower()
+    if suffix == ".tex":
+        text = re.sub(r"\\par\b", "\n\n", text)
+    if suffix in {".md", ".markdown"}:
         text = re.sub(
             r"(?m)^(?= {0,3}(?:[-+*]|[0-9]+[.)])\s+)",
             "\n\n",
@@ -2633,10 +2759,9 @@ def strip_public_nonrendered_comments(path_text: str, text: str) -> str:
         if comment_start is None:
             lines.append(line)
             continue
-        lines.append(
-            line[:comment_start]
-            + _blank_non_newlines(line[comment_start:])
-        )
+        # TeX comments consume their terminating physical newline, so
+        # visible text on the next source line joins directly to this prefix.
+        lines.append(line[:comment_start])
     return "".join(lines)
 
 
@@ -2646,14 +2771,16 @@ def validate_public_claim_text(
     claim_classes: dict[str, str],
 ) -> None:
     """Require each rendered positive cross-domain assertion to carry its own ID."""
-    rendered_text = html.unescape(
-        strip_public_nonrendered_comments(path_text, text)
-    )
+    rendered_text = strip_public_nonrendered_comments(path_text, text)
     suffix = Path(path_text).suffix.lower()
     if suffix in {".md", ".markdown"}:
+        # Parse source HTML before decoding character references. Encoded
+        # markup remains visible text rather than becoming raw HTML.
         rendered_text = normalize_markdown_visible_text(rendered_text)
-    elif suffix == ".tex":
-        rendered_text = normalize_latex_visible_text(rendered_text)
+    else:
+        rendered_text = html.unescape(rendered_text)
+        if suffix == ".tex":
+            rendered_text = normalize_latex_visible_text(rendered_text)
     paragraphs = split_public_rendered_blocks(path_text, rendered_text)
     for paragraph_number, paragraph in enumerate(paragraphs, start=1):
         compact = " ".join(paragraph.split())
@@ -2844,6 +2971,7 @@ def validate() -> None:
         if source_id in source_ids:
             fail(f"duplicate source id {source_id}")
         source_ids.add(source_id)
+        validate_reviewed_source_fields(source_id, source)
 
         kind = validate_source_kind(source_id, source.get("kind"))
         source_kinds[source_id] = kind
